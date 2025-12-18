@@ -70,21 +70,13 @@ pub fn search_entries(log_path: &Path, query: &str) -> io::Result<Vec<LogEntry>>
             let path = entry.path();
             if path.extension().and_then(|s| s.to_str()) == Some("md") {
                 let path_str = path.to_string_lossy().to_string();
-                let date_str = path
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("")
-                    .to_string();
 
                 if let Ok(content) = fs::read_to_string(&path) {
                     let parsed_entries = parse_log_content(&content, &path_str);
                     for entry in parsed_entries {
                         if entry.content.contains(query) {
-                            // 날짜 정보 추가
-                            let display_content = format!("[{}] {}", date_str, entry.content);
-
                             results.push(LogEntry {
-                                content: display_content,
+                                content: entry.content,
                                 file_path: entry.file_path,
                                 line_number: entry.line_number,
                                 end_line: entry.end_line,
@@ -150,7 +142,7 @@ fn parse_task_content(content: &str, path_str: &str) -> Vec<TaskItem> {
             let (text, tomato_count) = strip_trailing_tomatoes(text);
             tasks.push(TaskItem {
                 text: text.trim().to_string(),
-                indent: indent_spaces,
+                indent: (indent_spaces + 1) / 2,
                 tomato_count,
                 file_path: path_str.to_string(),
                 line_number: i,
@@ -268,6 +260,21 @@ pub fn replace_entry_lines(
     }
 
     fs::write(file_path, new_content)
+}
+
+pub fn read_lines_range(
+    file_path: &str,
+    start_line: usize,
+    end_line: usize,
+) -> io::Result<Vec<String>> {
+    let content = fs::read_to_string(file_path)?;
+    let lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
+
+    if start_line >= lines.len() {
+        return Ok(Vec::new());
+    }
+    let end_line = end_line.min(lines.len().saturating_sub(1));
+    Ok(lines[start_line..=end_line].to_vec())
 }
 
 pub fn append_tomato_to_line(file_path: &str, line_number: usize) -> io::Result<()> {

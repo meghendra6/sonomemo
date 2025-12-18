@@ -16,6 +16,8 @@ pub struct EditingEntry {
     pub start_line: usize,
     pub end_line: usize,
     pub timestamp_prefix: String, // e.g. "[12:34:56] "
+    pub from_search: bool,
+    pub search_query: Option<String>,
 }
 
 pub struct App<'a> {
@@ -31,11 +33,13 @@ pub struct App<'a> {
     pub tasks_state: ListState,
     pub today_done_tasks: usize,
     pub today_tomatoes: usize,
+    pub last_search_query: Option<String>,
     pub show_mood_popup: bool,
     pub mood_list_state: ListState,
     pub show_todo_popup: bool, // 할 일 요약 팝업
     pub pending_todos: Vec<String>,
     pub todo_list_state: ListState,
+    pub show_help_popup: bool,
     pub show_tag_popup: bool,
     pub tags: Vec<(String, usize)>, // (태그명, 횟수)
     pub tag_list_state: ListState,
@@ -49,10 +53,17 @@ pub struct App<'a> {
     pub activity_data: HashMap<String, usize>, // "YYYY-MM-DD" -> line_count
     pub show_path_popup: bool,
 
+    pub show_pomodoro_popup: bool,
+    pub pomodoro_minutes_input: String,
+    pub pomodoro_pending_task: Option<TaskItem>,
+
     // 뽀모도로 종료 알림 (이 시간까지 알림 표시 & 입력 차단)
     // 뽀모도로 종료 알림 (이 시간까지 알림 표시 & 입력 차단)
     pub pomodoro_alert_expiry: Option<DateTime<Local>>,
     pub pomodoro_alert_message: Option<String>,
+
+    pub toast_message: Option<String>,
+    pub toast_expiry: Option<DateTime<Local>>,
 
     // 설정 (안내 문구 등)
     // 설정 (안내 문구 등)
@@ -124,11 +135,13 @@ impl<'a> App<'a> {
             tasks_state,
             today_done_tasks,
             today_tomatoes,
+            last_search_query: None,
             show_mood_popup,
             mood_list_state,
             show_todo_popup,
             pending_todos,
             todo_list_state: ListState::default(),
+            show_help_popup: false,
             show_tag_popup: false,
             tags: Vec::new(),
             tag_list_state: ListState::default(),
@@ -139,14 +152,21 @@ impl<'a> App<'a> {
             show_activity_popup: false,
             activity_data: HashMap::new(),
             show_path_popup: false,
+            show_pomodoro_popup: false,
+            pomodoro_minutes_input: String::new(),
+            pomodoro_pending_task: None,
             pomodoro_alert_expiry: None,
             pomodoro_alert_message: None,
+            toast_message: None,
+            toast_expiry: None,
             config,
         }
     }
 
     pub fn start_edit_entry(&mut self, entry: &LogEntry) {
-        let mut lines: Vec<String> = entry.content.lines().map(|s| s.to_string()).collect();
+        let mut lines: Vec<String> =
+            storage::read_lines_range(&entry.file_path, entry.line_number, entry.end_line)
+                .unwrap_or_else(|_| entry.content.lines().map(|s| s.to_string()).collect());
         if lines.is_empty() {
             return;
         }
@@ -161,6 +181,8 @@ impl<'a> App<'a> {
             start_line: entry.line_number,
             end_line: entry.end_line,
             timestamp_prefix,
+            from_search: self.is_search_result,
+            search_query: self.last_search_query.clone(),
         });
         self.transition_to(InputMode::Editing);
     }
@@ -188,6 +210,11 @@ impl<'a> App<'a> {
         let (done, tomatoes) = compute_today_task_stats(&self.logs);
         self.today_done_tasks = done;
         self.today_tomatoes = tomatoes;
+    }
+
+    pub fn toast(&mut self, message: impl Into<String>) {
+        self.toast_message = Some(message.into());
+        self.toast_expiry = Some(Local::now() + chrono::Duration::seconds(2));
     }
 
     pub fn scroll_up(&mut self) {
@@ -298,9 +325,10 @@ impl<'a> App<'a> {
                 self.navigate_focus = NavigateFocus::Timeline;
                 self.textarea_viewport_row = 0;
                 self.textarea_viewport_col = 0;
-                // 검색 결과 화면에서 편집으로 넘어갈 때 전체 로그로 복귀
-                if self.is_search_result {
+                // 검색 결과 화면에서 "Compose"로 들어갈 때만 전체 로그로 복귀 (엔트리 편집은 유지)
+                if self.is_search_result && self.editing_entry.is_none() {
                     self.update_logs();
+                    self.last_search_query = None;
                 }
             }
             InputMode::Search => {

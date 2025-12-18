@@ -1,5 +1,6 @@
 # Full Configuration Sample (Sonomemo)
-# Copy this content to `config.toml` (optional).
+# By default, Sonomemo loads `config.toml` from the OS config directory.
+# If you want to use a local file, run with: `SONOMEMO_CONFIG=./config.toml`
 # You can override only what you need; missing values fall back to defaults.
 
 [data]

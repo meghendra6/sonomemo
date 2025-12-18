@@ -320,17 +320,17 @@ fn split_markdown_prefix(text: &str) -> (String, &str, usize) {
 fn normalize_leading_whitespace(text: &str) -> (String, &str) {
     let bytes = text.as_bytes();
     let mut i = 0;
-    let mut out = String::new();
+    let mut spaces = 0usize;
 
     while i < bytes.len() {
         match bytes[i] {
             b' ' => {
-                out.push(' ');
                 i += 1;
+                spaces += 1;
             }
             b'\t' => {
-                out.push_str("    ");
                 i += 1;
+                spaces += 4;
             }
             _ => break,
         }
@@ -338,6 +338,23 @@ fn normalize_leading_whitespace(text: &str) -> (String, &str) {
 
     // Safe because i stops on ASCII whitespace boundaries.
     let rest = &text[i..];
+    let is_list = rest.starts_with("- [ ] ")
+        || rest.starts_with("- [x] ")
+        || rest.starts_with("- [X] ")
+        || rest.starts_with("- ")
+        || rest.starts_with("* ")
+        || rest.starts_with("+ ")
+        || split_ordered_list_marker(rest).is_some();
+
+    let out = if is_list {
+        // Quantize indentation into list nesting levels (2 spaces per level).
+        // This avoids "indentation by arbitrary spaces" and makes depth feel consistent.
+        let level = (spaces + 1) / 2;
+        "  ".repeat(level)
+    } else {
+        " ".repeat(spaces)
+    };
+
     (out, rest)
 }
 

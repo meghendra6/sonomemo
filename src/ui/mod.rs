@@ -11,6 +11,7 @@ use crate::app::App;
 use crate::models::{InputMode, NavigateFocus};
 use crate::ui::color_parser::parse_color;
 use ratatui::style::Stylize;
+use std::path::Path;
 
 pub mod color_parser;
 pub mod components;
@@ -18,11 +19,11 @@ pub mod popups;
 
 use components::{parse_markdown_spans, wrap_markdown_line};
 use popups::{
-    render_activity_popup, render_mood_popup, render_path_popup, render_siren_popup,
-    render_tag_popup, render_todo_popup,
+    render_activity_popup, render_help_popup, render_mood_popup, render_path_popup,
+    render_pomodoro_popup, render_siren_popup, render_tag_popup, render_todo_popup,
 };
 
-const HELP_NAVIGATE: &str = " h/l: Focus  j/k: Move  Space/Enter: Toggle Task  e: Edit  i: Compose  /: Search  t: Tags  p: Pomodoro  g: Activity  o: Log Dir  Ctrl+Q: Quit ";
+const HELP_NAVIGATE: &str = " ?: Help  h/l: Focus  j/k: Move  Space/Enter: Toggle Task  e: Edit  i: Compose  /: Search  t: Tags  p: Pomodoro  g: Activity  o: Log Dir  Ctrl+Q: Quit ";
 const HELP_COMPOSE: &str = " Enter: New line  Ctrl+S/Ctrl+D: Save  Ctrl+L: Clear  Esc: Back ";
 const HELP_SEARCH: &str = " Enter: Apply  Ctrl+L: Clear  Esc: Cancel ";
 
@@ -61,15 +62,25 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             let mut lines: Vec<Line<'static>> = Vec::new();
             let mut in_code_block = false;
 
+            let date_prefix = if app.is_search_result {
+                file_date(&entry.file_path)
+            } else {
+                None
+            };
+            let date_width: usize = if date_prefix.is_some() { 11 } else { 0 }; // "YYYY-MM-DD "
+            let blank_date = " ".repeat(date_width);
+
             let entry_has_timestamp = entry
                 .content
                 .lines()
                 .next()
                 .is_some_and(|l| is_timestamped_line(l));
             let content_width = if entry_has_timestamp {
-                list_area_width.saturating_sub(timestamp_width)
-            } else {
                 list_area_width
+                    .saturating_sub(date_width)
+                    .saturating_sub(timestamp_width)
+            } else {
+                list_area_width.saturating_sub(date_width)
             };
 
             for (line_idx, raw_line) in entry.content.lines().enumerate() {
@@ -85,6 +96,23 @@ pub fn ui(f: &mut Frame, app: &mut App) {
 
                 let wrapped = wrap_markdown_line(content_line, content_width);
                 for (wrap_idx, wline) in wrapped.iter().enumerate() {
+                    let mut spans = Vec::new();
+
+                    if date_width > 0 {
+                        let date_span = if line_idx == 0 && wrap_idx == 0 {
+                            let date = date_prefix.clone().unwrap_or_default();
+                            Span::styled(
+                                format!("{date} "),
+                                Style::default()
+                                    .fg(Color::DarkGray)
+                                    .add_modifier(Modifier::BOLD),
+                            )
+                        } else {
+                            Span::raw(blank_date.clone())
+                        };
+                        spans.push(date_span);
+                    }
+
                     if entry_has_timestamp {
                         let ts_span = if line_idx == 0 && wrap_idx == 0 {
                             Span::styled(
@@ -94,22 +122,15 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                         } else {
                             Span::raw(blank_timestamp.clone())
                         };
-
-                        let mut spans = Vec::new();
                         spans.push(ts_span);
-                        spans.extend(parse_markdown_spans(
-                            wline,
-                            &app.config.theme,
-                            line_in_code_block,
-                        ));
-                        lines.push(Line::from(spans));
-                    } else {
-                        lines.push(Line::from(parse_markdown_spans(
-                            wline,
-                            &app.config.theme,
-                            line_in_code_block,
-                        )));
                     }
+
+                    spans.extend(parse_markdown_spans(
+                        wline,
+                        &app.config.theme,
+                        line_in_code_block,
+                    ));
+                    lines.push(Line::from(spans));
                 }
 
                 if is_fence {
@@ -212,7 +233,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         .iter()
         .map(|task| {
             let mut line = String::new();
-            line.push_str(&" ".repeat(task.indent));
+            line.push_str(&"  ".repeat(task.indent));
             line.push_str("- [ ] ");
             line.push_str(&task.text);
 
@@ -293,39 +314,77 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         .highlight_style(todo_highlight_style);
     f.render_stateful_widget(todo_list, top_chunks[1], &mut app.tasks_state);
 
-    // 하단 입력창
-    let (input_title, border_color) = match app.input_mode {
-        crate::models::InputMode::Search => {
-            (" Search ", parse_color(&app.config.theme.border_search))
-        }
-        crate::models::InputMode::Editing => {
-            (" Composer ", parse_color(&app.config.theme.border_editing))
-        }
-        crate::models::InputMode::Navigate => {
-            (" Navigate ", parse_color(&app.config.theme.border_default))
-        }
-    };
-
-    let input_block = Block::default()
-        .borders(Borders::ALL)
-        .title(input_title)
-        .border_style(Style::default().fg(border_color));
-
-    app.textarea.set_block(input_block);
-
-    // Editing/Search 모드일 때만 커서 스타일 적용
+    // 하단 영역: Navigate는 Status 패널, Editing/Search는 TextArea
     match app.input_mode {
-        crate::models::InputMode::Navigate => {
-            app.textarea.set_cursor_style(Style::default());
+        InputMode::Navigate => {
+            let border_color = parse_color(&app.config.theme.border_default);
+            let focus = match app.navigate_focus {
+                NavigateFocus::Timeline => "Timeline",
+                NavigateFocus::Tasks => "Tasks",
+            };
+
+            let selected = match app.navigate_focus {
+                NavigateFocus::Timeline => app
+                    .logs_state
+                    .selected()
+                    .and_then(|i| app.logs.get(i))
+                    .and_then(|e| e.content.lines().next())
+                    .unwrap_or(""),
+                NavigateFocus::Tasks => app
+                    .tasks_state
+                    .selected()
+                    .and_then(|i| app.tasks.get(i))
+                    .map(|t| t.text.as_str())
+                    .unwrap_or(""),
+            };
+
+            let status = vec![
+                Line::from(vec![
+                    Span::styled("Focus: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(focus, Style::default().add_modifier(Modifier::BOLD)),
+                    Span::raw("  "),
+                    Span::styled("Selected: ", Style::default().fg(Color::DarkGray)),
+                    Span::raw(truncate(selected, 80)),
+                ]),
+                Line::from(Span::raw(
+                    "Press ? for help. Press i to compose. Press / to search.",
+                )),
+            ];
+
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .title(" Status ")
+                .border_style(Style::default().fg(border_color));
+            f.render_widget(
+                Paragraph::new(status)
+                    .block(block)
+                    .wrap(ratatui::widgets::Wrap { trim: true }),
+                chunks[1],
+            );
         }
-        _ => {
+        InputMode::Editing | InputMode::Search => {
+            let (input_title, border_color) = match app.input_mode {
+                crate::models::InputMode::Search => {
+                    (" Search ", parse_color(&app.config.theme.border_search))
+                }
+                crate::models::InputMode::Editing => {
+                    (" Composer ", parse_color(&app.config.theme.border_editing))
+                }
+                crate::models::InputMode::Navigate => unreachable!(),
+            };
+
+            let input_block = Block::default()
+                .borders(Borders::ALL)
+                .title(input_title)
+                .border_style(Style::default().fg(border_color));
+
+            app.textarea.set_block(input_block);
             app.textarea
                 .set_cursor_line_style(Style::default().underline_color(Color::Reset));
             app.textarea.set_cursor_style(Style::default().reversed());
+            f.render_widget(&app.textarea, chunks[1]);
         }
     }
-
-    f.render_widget(&app.textarea, chunks[1]);
 
     // 커서 위치 수동 설정 (한글 IME 지원을 위해 필수)
     if app.input_mode == crate::models::InputMode::Editing
@@ -358,11 +417,15 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         }
     }
 
-    // 하단 도움말 푸터
-    let help_text = match app.input_mode {
-        InputMode::Navigate => HELP_NAVIGATE,
-        InputMode::Editing => HELP_COMPOSE,
-        InputMode::Search => HELP_SEARCH,
+    // 하단 도움말 푸터 (toast 우선)
+    let help_text = if let Some(msg) = app.toast_message.as_deref() {
+        msg
+    } else {
+        match app.input_mode {
+            InputMode::Navigate => HELP_NAVIGATE,
+            InputMode::Editing => HELP_COMPOSE,
+            InputMode::Search => HELP_SEARCH,
+        }
     };
     let footer = Paragraph::new(Line::from(Span::styled(
         help_text,
@@ -388,6 +451,14 @@ pub fn ui(f: &mut Frame, app: &mut App) {
 
     if app.show_tag_popup {
         render_tag_popup(f, app);
+    }
+
+    if app.show_help_popup {
+        render_help_popup(f, app);
+    }
+
+    if app.show_pomodoro_popup {
+        render_pomodoro_popup(f, app);
     }
 
     if app.pomodoro_alert_expiry.is_some() {
@@ -446,4 +517,11 @@ fn is_timestamped_line(line: &str) -> bool {
         && bytes[6] == b':'
         && bytes[7].is_ascii_digit()
         && bytes[8].is_ascii_digit()
+}
+
+fn file_date(file_path: &str) -> Option<String> {
+    Path::new(file_path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_string())
 }

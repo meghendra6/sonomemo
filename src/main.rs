@@ -135,6 +135,13 @@ fn check_timers(app: &mut App) {
             app.pomodoro_alert_message = None;
         }
     }
+
+    if let Some(expiry) = app.toast_expiry {
+        if Local::now() >= expiry {
+            app.toast_expiry = None;
+            app.toast_message = None;
+        }
+    }
 }
 
 fn handle_key_input(app: &mut App, key: event::KeyEvent) {
@@ -150,6 +157,18 @@ fn handle_key_input(app: &mut App, key: event::KeyEvent) {
 }
 
 fn handle_popup_events(app: &mut App, key: event::KeyEvent) -> bool {
+    if app.show_help_popup {
+        if key.code == KeyCode::Esc || key_match(&key, &app.config.keybindings.global.help) {
+            app.show_help_popup = false;
+        }
+        return true;
+    }
+
+    if app.show_pomodoro_popup {
+        handle_pomodoro_popup(app, key);
+        return true;
+    }
+
     if app.show_mood_popup {
         handle_mood_popup(app, key);
         return true;
@@ -284,6 +303,7 @@ fn handle_tag_popup(app: &mut App, key: event::KeyEvent) {
                 if let Ok(results) = storage::search_entries(&app.config.data.log_path, &query) {
                     app.logs = results;
                     app.is_search_result = true;
+                    app.last_search_query = Some(query);
                     app.logs_state.select(Some(0));
                 }
             }
@@ -297,7 +317,9 @@ fn handle_tag_popup(app: &mut App, key: event::KeyEvent) {
 }
 
 fn handle_normal_mode(app: &mut App, key: event::KeyEvent) {
-    if key_match(&key, &app.config.keybindings.global.tags) {
+    if key_match(&key, &app.config.keybindings.global.help) {
+        app.show_help_popup = true;
+    } else if key_match(&key, &app.config.keybindings.global.tags) {
         if let Ok(tags) = storage::get_all_tags(&app.config.data.log_path) {
             app.tags = tags;
             if !app.tags.is_empty() {
@@ -356,12 +378,10 @@ fn handle_normal_mode(app: &mut App, key: event::KeyEvent) {
     } else if app.navigate_focus == models::NavigateFocus::Timeline
         && key_match(&key, &app.config.keybindings.timeline.edit)
     {
-        if !app.is_search_result {
-            if let Some(i) = app.logs_state.selected() {
-                if i < app.logs.len() {
-                    let entry = app.logs[i].clone();
-                    app.start_edit_entry(&entry);
-                }
+        if let Some(i) = app.logs_state.selected() {
+            if i < app.logs.len() {
+                let entry = app.logs[i].clone();
+                app.start_edit_entry(&entry);
             }
         }
     } else if app.navigate_focus == models::NavigateFocus::Tasks
@@ -378,30 +398,19 @@ fn handle_normal_mode(app: &mut App, key: event::KeyEvent) {
         if let Some(i) = app.tasks_state.selected() {
             if i < app.tasks.len() {
                 let task = app.tasks[i].clone();
-                if !app.is_search_result {
-                    if let Some(entry) = app.logs.iter().find(|e| {
-                        e.file_path == task.file_path
-                            && e.line_number <= task.line_number
-                            && task.line_number <= e.end_line
-                    }) {
-                        let entry = entry.clone();
-                        app.start_edit_entry(&entry);
-                    }
-                } else {
-                    app.update_logs();
-                    if let Some(entry) = app.logs.iter().find(|e| {
-                        e.file_path == task.file_path
-                            && e.line_number <= task.line_number
-                            && task.line_number <= e.end_line
-                    }) {
-                        let entry = entry.clone();
-                        app.start_edit_entry(&entry);
-                    }
+                if let Some(entry) = app.logs.iter().find(|e| {
+                    e.file_path == task.file_path
+                        && e.line_number <= task.line_number
+                        && task.line_number <= e.end_line
+                }) {
+                    let entry = entry.clone();
+                    app.start_edit_entry(&entry);
                 }
             }
         }
     } else if key.code == KeyCode::Esc {
         if app.is_search_result {
+            app.last_search_query = None;
             app.update_logs();
         }
     } else if app.navigate_focus == models::NavigateFocus::Timeline
@@ -434,70 +443,9 @@ fn handle_normal_mode(app: &mut App, key: event::KeyEvent) {
     } else if app.navigate_focus == models::NavigateFocus::Tasks
         && key_match(&key, &app.config.keybindings.tasks.start_pomodoro)
     {
-        if let Some(i) = app.tasks_state.selected() {
-            if i < app.tasks.len() {
-                let task = app.tasks[i].clone();
-                let mins = app.config.pomodoro.work_minutes as i64;
-                if mins > 0 {
-                    if let Some(models::PomodoroTarget::Task {
-                        file_path,
-                        line_number,
-                        ..
-                    }) = app.pomodoro_target.as_ref()
-                    {
-                        if app.pomodoro_end.is_some()
-                            && *file_path == task.file_path
-                            && *line_number == task.line_number
-                        {
-                            app.pomodoro_end = None;
-                            app.pomodoro_target = None;
-                            return;
-                        }
-                    }
-                    app.pomodoro_end = Some(Local::now() + Duration::minutes(mins));
-                    app.pomodoro_target = Some(models::PomodoroTarget::Task {
-                        text: task.text,
-                        file_path: task.file_path,
-                        line_number: task.line_number,
-                    });
-                    app.pomodoro_alert_expiry = None;
-                    app.pomodoro_alert_message = None;
-                }
-            }
-        }
+        open_or_toggle_pomodoro_for_selected_task(app);
     } else if key_match(&key, &app.config.keybindings.global.pomodoro) {
-        app.navigate_focus = models::NavigateFocus::Tasks;
-        if let Some(i) = app.tasks_state.selected() {
-            if i < app.tasks.len() {
-                let task = app.tasks[i].clone();
-                let mins = app.config.pomodoro.work_minutes as i64;
-                if mins > 0 {
-                    if let Some(models::PomodoroTarget::Task {
-                        file_path,
-                        line_number,
-                        ..
-                    }) = app.pomodoro_target.as_ref()
-                    {
-                        if app.pomodoro_end.is_some()
-                            && *file_path == task.file_path
-                            && *line_number == task.line_number
-                        {
-                            app.pomodoro_end = None;
-                            app.pomodoro_target = None;
-                            return;
-                        }
-                    }
-                    app.pomodoro_end = Some(Local::now() + Duration::minutes(mins));
-                    app.pomodoro_target = Some(models::PomodoroTarget::Task {
-                        text: task.text,
-                        file_path: task.file_path,
-                        line_number: task.line_number,
-                    });
-                    app.pomodoro_alert_expiry = None;
-                    app.pomodoro_alert_message = None;
-                }
-            }
-        }
+        open_or_toggle_pomodoro_for_selected_task(app);
     } else if key_match(&key, &app.config.keybindings.global.activity) {
         if let Ok(data) = storage::get_activity_stats(&app.config.data.log_path) {
             app.activity_data = data;
@@ -509,7 +457,13 @@ fn handle_normal_mode(app: &mut App, key: event::KeyEvent) {
 }
 
 fn handle_search_mode(app: &mut App, key: event::KeyEvent) {
+    if key_match(&key, &app.config.keybindings.global.help) {
+        app.show_help_popup = true;
+        return;
+    }
+
     if key_match(&key, &app.config.keybindings.search.cancel) {
+        app.last_search_query = None;
         app.transition_to(InputMode::Navigate);
     } else if key_match(&key, &app.config.keybindings.search.clear) {
         app.textarea = tui_textarea::TextArea::default();
@@ -523,6 +477,7 @@ fn handle_search_mode(app: &mut App, key: event::KeyEvent) {
             .collect::<Vec<&str>>()
             .join(" ");
         if !query.trim().is_empty() {
+            app.last_search_query = Some(query.clone());
             if let Ok(results) = storage::search_entries(&app.config.data.log_path, &query) {
                 app.logs = results;
                 app.is_search_result = true;
@@ -536,6 +491,11 @@ fn handle_search_mode(app: &mut App, key: event::KeyEvent) {
 }
 
 fn handle_editing_mode(app: &mut App, key: event::KeyEvent) {
+    if key_match(&key, &app.config.keybindings.global.help) {
+        app.show_help_popup = true;
+        return;
+    }
+
     if key_match(&key, &app.config.keybindings.composer.cancel) {
         app.editing_entry = None;
         app.textarea = tui_textarea::TextArea::default();
@@ -550,6 +510,7 @@ fn handle_editing_mode(app: &mut App, key: event::KeyEvent) {
         let is_empty = lines.iter().all(|l| l.trim().is_empty());
 
         if let Some(editing) = app.editing_entry.take() {
+            let selection_hint = (editing.file_path.clone(), editing.start_line);
             let mut new_lines: Vec<String> = Vec::new();
             if !is_empty {
                 let timestamp_prefix = if editing.timestamp_prefix.is_empty() {
@@ -572,7 +533,22 @@ fn handle_editing_mode(app: &mut App, key: event::KeyEvent) {
             ) {
                 eprintln!("Error updating entry: {}", e);
             }
-            app.update_logs();
+            if editing.from_search {
+                if let Some(query) = editing.search_query.as_deref() {
+                    app.last_search_query = Some(query.to_string());
+                    refresh_search_results(app, query);
+                    if let Some(i) = app.logs.iter().position(|e| {
+                        e.file_path == selection_hint.0 && e.line_number == selection_hint.1
+                    }) {
+                        app.logs_state.select(Some(i));
+                    }
+                } else {
+                    app.last_search_query = None;
+                    app.update_logs();
+                }
+            } else {
+                app.update_logs();
+            }
         } else {
             let input = lines.join("\n");
             if !input.trim().is_empty() {
@@ -585,9 +561,103 @@ fn handle_editing_mode(app: &mut App, key: event::KeyEvent) {
 
         // 텍스트 영역 초기화
         app.textarea = tui_textarea::TextArea::default();
-        app.transition_to(InputMode::Editing);
+        app.transition_to(InputMode::Navigate);
     } else {
         app.textarea.input(key);
+    }
+}
+
+fn refresh_search_results(app: &mut App, query: &str) {
+    if let Ok(results) = storage::search_entries(&app.config.data.log_path, query) {
+        app.logs = results;
+        app.is_search_result = true;
+        app.logs_state.select(Some(0));
+    }
+}
+
+fn open_or_toggle_pomodoro_for_selected_task(app: &mut App) {
+    app.navigate_focus = models::NavigateFocus::Tasks;
+
+    let Some(i) = app.tasks_state.selected() else {
+        app.toast("No task selected.");
+        return;
+    };
+    if i >= app.tasks.len() {
+        app.toast("No task selected.");
+        return;
+    }
+
+    let task = app.tasks[i].clone();
+
+    if let Some(models::PomodoroTarget::Task {
+        file_path,
+        line_number,
+        ..
+    }) = app.pomodoro_target.as_ref()
+    {
+        if app.pomodoro_end.is_some()
+            && *file_path == task.file_path
+            && *line_number == task.line_number
+        {
+            app.pomodoro_end = None;
+            app.pomodoro_target = None;
+            app.toast("Pomodoro stopped.");
+            return;
+        }
+    }
+
+    app.pomodoro_pending_task = Some(task);
+    app.pomodoro_minutes_input = app.config.pomodoro.work_minutes.to_string();
+    app.show_pomodoro_popup = true;
+}
+
+fn handle_pomodoro_popup(app: &mut App, key: event::KeyEvent) {
+    if key_match(&key, &app.config.keybindings.popup.cancel) || key.code == KeyCode::Esc {
+        app.show_pomodoro_popup = false;
+        app.pomodoro_pending_task = None;
+        return;
+    }
+
+    if key_match(&key, &app.config.keybindings.popup.confirm) {
+        let task = match app.pomodoro_pending_task.take() {
+            Some(t) => t,
+            None => {
+                app.show_pomodoro_popup = false;
+                app.toast("No task selected.");
+                return;
+            }
+        };
+
+        let default_mins = app.config.pomodoro.work_minutes as i64;
+        let mins = app
+            .pomodoro_minutes_input
+            .trim()
+            .parse::<i64>()
+            .ok()
+            .unwrap_or(default_mins)
+            .clamp(1, 600);
+
+        app.pomodoro_end = Some(Local::now() + Duration::minutes(mins));
+        app.pomodoro_target = Some(models::PomodoroTarget::Task {
+            text: task.text.clone(),
+            file_path: task.file_path.clone(),
+            line_number: task.line_number,
+        });
+        app.pomodoro_alert_expiry = None;
+        app.pomodoro_alert_message = None;
+        app.show_pomodoro_popup = false;
+        app.toast(format!("Pomodoro started: {}m · {}", mins, task.text));
+        return;
+    }
+
+    match key.code {
+        KeyCode::Char(c) if c.is_ascii_digit() => {
+            app.pomodoro_minutes_input.push(c);
+        }
+        KeyCode::Backspace => {
+            app.pomodoro_minutes_input.pop();
+        }
+        _ => {}
     }
 }
 
