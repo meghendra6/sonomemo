@@ -6,6 +6,12 @@ pub enum InputMode {
 }
 
 #[derive(Clone, Copy, PartialEq)]
+pub enum NavigateFocus {
+    Timeline,
+    Tasks,
+}
+
+#[derive(Clone, Copy, PartialEq)]
 pub enum Mood {
     Happy,
     Neutral,
@@ -27,11 +33,11 @@ impl Mood {
 
     pub fn as_str(&self) -> &'static str {
         match self {
-            Mood::Happy => "😊 조음",
-            Mood::Neutral => "😐 걍그럼",
-            Mood::Stressed => "😫 구림",
-            Mood::Focused => "🧐 집중",
-            Mood::Tired => "😴 피곤",
+            Mood::Happy => "😊 Happy",
+            Mood::Neutral => "😐 Neutral",
+            Mood::Stressed => "😫 Stressed",
+            Mood::Focused => "🧐 Focused",
+            Mood::Tired => "😴 Tired",
         }
     }
 }
@@ -41,4 +47,23 @@ pub struct LogEntry {
     pub content: String,
     pub file_path: String,
     pub line_number: usize,
+    pub end_line: usize,
+}
+
+#[derive(Clone)]
+pub struct TaskItem {
+    pub text: String,
+    pub indent: usize,
+    pub tomato_count: usize,
+    pub file_path: String,
+    pub line_number: usize,
+}
+
+#[derive(Clone)]
+pub enum PomodoroTarget {
+    Task {
+        text: String,
+        file_path: String,
+        line_number: usize,
+    },
 }

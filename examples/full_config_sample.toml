@@ -1,35 +1,77 @@
-# Full Configuration Sample
-# Copy this content to config.toml to customize everything!
+# Full Configuration Sample (Sonomemo)
+# Copy this content to `config.toml` (optional).
+# You can override only what you need; missing values fall back to defaults.
 
-[placeholders]
-navigate = "Navigation Mode (Custom)"
-editing = "Editing Mode (Custom)"
-search = "Search Mode (Custom)"
+[data]
+# Absolute path is recommended. If you set a relative path, it will be normalized to an absolute
+# path under the app data dir and auto-saved.
+log_path = "logs"
 
-[keybindings.navigate]
-quit = ["q", "ctrl+q"]          # Must be a list like ["a", "b"]
-tags = ["t"]
-insert = ["i"]
+[pomodoro]
+work_minutes = 25
+short_break_minutes = 5
+long_break_minutes = 15
+long_break_every = 4
+alert_seconds = 5
+
+[keybindings.global]
+quit = ["ctrl+q", "q"]
+help = ["?"]
+focus_timeline = ["h"]
+focus_tasks = ["l"]
+focus_composer = ["i"]
+focus_next = ["tab"]
+focus_prev = ["backtab"]
 search = ["/"]
+tags = ["t"]
+activity = ["g"]
+log_dir = ["o"]
 pomodoro = ["p"]
-graph = ["g"]
-toggle_todo = ["enter"]
 
-[keybindings.editing]
-save = ["ctrl+s", "enter"]      # Note: "enter" here overlaps with newline if not careful
-newline = ["shift+enter"]
+[keybindings.timeline]
+up = ["k", "up"]
+down = ["j", "down"]
+page_up = ["ctrl+u", "pageup"]
+page_down = ["ctrl+d", "pagedown"]
+top = ["home"]
+bottom = ["end"]
+toggle_todo = ["enter", "space"]
+open = ["enter"]
+edit = ["e"]
+
+[keybindings.tasks]
+up = ["k", "up"]
+down = ["j", "down"]
+toggle = ["space", "enter"]
+start_pomodoro = ["p"]
+open = ["enter"]
+edit = ["e"]
+
+[keybindings.composer]
+submit = ["ctrl+s", "ctrl+d"]
+newline = ["enter"]
 cancel = ["esc"]
+clear = ["ctrl+l"]
 
 [keybindings.search]
 submit = ["enter"]
 cancel = ["esc"]
+clear = ["ctrl+l"]
 
 [keybindings.popup]
-confirm = ["y", "enter"]
-cancel = ["n", "esc"]
+confirm = ["enter", "y"]
+cancel = ["esc", "n"]
 up = ["k", "up"]
 down = ["j", "down"]
 
 [theme]
-border_default = "Green"
-# ... add other theme keys here
+border_default = "Reset"
+border_editing = "Green"
+border_search = "Cyan"
+border_todo_header = "Yellow"
+text_highlight = "50,50,50"
+todo_done = "Green"
+todo_wip = "Red"
+tag = "Yellow"
+mood = "Magenta"
+timestamp = "Blue"

@@ -10,7 +10,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
 };
 
-pub fn render_siren_popup(f: &mut Frame) {
+pub fn render_siren_popup(f: &mut Frame, app: &App) {
     let block = Block::default().borders(Borders::ALL).style(
         Style::default()
             .fg(Color::Red)
@@ -22,14 +22,20 @@ pub fn render_siren_popup(f: &mut Frame) {
     f.render_widget(Clear, area);
     f.render_widget(block, area);
 
+    let message = app
+        .pomodoro_alert_message
+        .as_deref()
+        .unwrap_or("Pomodoro complete.");
+
     let siren_art = vec![
         "         _______  TIME'S UP!  _______",
         "        /       \\            /       \\",
         "       |  (o)  |   🚨🚨🚨   |  (o)  |",
         "        \\_______/            \\_______/",
         "",
-        "      Take a break! Stretch! Drink water!",
-        "      (Input blocked for 5 seconds)",
+        message,
+        "",
+        "Take a break. Stretch. Drink water.",
     ];
 
     let text_area = Layout::default()
@@ -91,28 +97,9 @@ pub fn render_activity_popup(f: &mut Frame, app: &App) {
     f.render_widget(List::new(items), inner_area);
 }
 
-pub fn render_pomodoro_popup(f: &mut Frame, app: &App) {
-    let block = Block::default()
-        .title(" 🍅 Set Timer (Minutes) ")
-        .borders(Borders::ALL);
-    let area = centered_rect(40, 20, f.area());
-    f.render_widget(Clear, area);
-    f.render_widget(block, area);
-
-    let input_area = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1)])
-        .margin(2)
-        .split(area)[0];
-
-    let text = Paragraph::new(format!("{} _", app.pomodoro_input))
-        .style(Style::default().fg(Color::Yellow));
-    f.render_widget(text, input_area);
-}
-
 pub fn render_mood_popup(f: &mut Frame, app: &mut App) {
     let block = Block::default()
-        .title(" 기분이가 좀 어떠세여? ")
+        .title(" Mood Check-in ")
         .borders(Borders::ALL);
     let area = centered_rect(60, 20, f.area());
     f.render_widget(Clear, area);
@@ -136,7 +123,7 @@ pub fn render_mood_popup(f: &mut Frame, app: &mut App) {
 
 pub fn render_todo_popup(f: &mut Frame, app: &mut App) {
     let title = format!(
-        " 지난 할 일이 {}개 남았습니다. 오늘로 가져올까요? (Y/n) ",
+        " Carry over {} unfinished tasks from the last session? (Y/n) ",
         app.pending_todos.len()
     );
     let block = Block::default()
@@ -166,7 +153,7 @@ pub fn render_todo_popup(f: &mut Frame, app: &mut App) {
 
 pub fn render_tag_popup(f: &mut Frame, app: &mut App) {
     let block = Block::default()
-        .title(" 태그를 선택하세요 (Enter: 검색, Esc: 닫기) ")
+        .title(" Select a tag (Enter: filter, Esc: close) ")
         .borders(Borders::ALL);
     let area = centered_rect(50, 60, f.area());
     f.render_widget(Clear, area);

@@ -72,19 +72,22 @@ graph TD
 ### 1. 📝 Editing Mode (입력 모드)
 > **"생각나는 것을 바로 적으세요"**
 - 앱을 켜자마자 만나는 화면입니다.
-- **Enter**: 메모 저장
-- **Shift + Enter**: 줄바꿈 (멀티라인 입력)
+- **Enter**: 줄바꿈 (멀티라인 입력)
+- **Ctrl + S / Ctrl + D**: 메모 저장
 - **Esc**: Navigate 모드로 전환
 
 ### 2. 🧭 Navigate Mode (탐색 모드)
 > **"기록을 훑어보고 기능을 실행하세요"**
-- 화살표 키(`↑`, `↓`)로 이전 기록을 스크롤합니다.
-- `i`: 다시 입력 모드로 전환
-- `?`: 검색 모드 진입
+- `h/l`로 **Timeline/Tasks 포커스**를 전환합니다.
+- `j/k`(또는 `↑/↓`)로 포커스된 패널에서 이동합니다.
+- `e`: (Timeline/Tasks) 선택 항목의 원본 엔트리 편집
+- `i`: 입력 모드로 전환
+- `/`: 검색 모드 진입
 - `t`: 태그별로 모아보기
-- `p`: 뽀모도로 타이머 설정 (25분 등)
+- `p`: 뽀모도로 (선택한 Task에 시작/중지, 종료 시 🍅 추가)
 - `g`: 활동 그래프 확인
-- `l`: 로그 폴더 경로 확인 및 열기 (탐색기 실행)
+- `o`: 로그 폴더 경로 확인 및 열기
+- `Ctrl+q` 또는 `q`: 앱 종료
 
 ### 3. 🔍 Search Mode (검색 모드)
 - 검색어를 입력하고 Enter를 누르면 해당 단어가 포함된 메모만 필터링합니다.
@@ -109,41 +112,49 @@ cargo install --path .
 
 | 키 | 동작 (Navigate 모드 기준) |
 |:--- |:--- |
+| `h / l` | Timeline / Tasks 포커스 전환 |
+| `j / k` | 이동 (포커스된 패널 기준) |
+| `space / enter` | (Tasks) 할 일 토글 |
+| `e` | (Timeline/Tasks) 선택 엔트리 편집 |
 | `i` | 입력 모드 전환 (메모 작성) |
-| `?` | 검색 모드 진입 |
+| `/` | 검색 모드 진입 |
 | `t` | 태그 필터링 |
-| `p` | 뽀모도로 타이머 설정/해제 |
+| `p` | (Tasks) 뽀모도로 시작/중지 |
 | `g` | 활동 그래프(잔디) 확인 |
-| `l` | 로그 폴더 확인 및 열기 |
-| `q` | 앱 종료 |
+| `o` | 로그 폴더 확인 및 열기 |
+| `ctrl+q` / `q` | 앱 종료 |
 
 ## ⚙️ 설정 (Configuration) (New!)
 
 Sonomemo v0.1.2부터는 `config.toml`을 통해 **단축키**와 **테마**를 자유롭게 변경할 수 있습니다.
-실행 파일이 있는 경로에 `config.toml` 파일을 생성하여 사용하세요.
+기본적으로 OS의 안정적인 설정 경로에 `config.toml`이 생성/로딩되며, 실행 위치(CWD)에 영향을 받지 않습니다.
+로컬 파일을 쓰고 싶다면 `SONOMEMO_CONFIG=./config.toml`처럼 환경변수로 경로를 지정하세요.
 
 ### 🎨 테마 및 단축키 설정 예시
 ```toml
 # Sonomemo Configuration
 
-[placeholders]
-navigate = "키를 눌러 각종 기능을 사용하세요..."
-editing = "오늘의 기록을 남겨보세요..."
-
 # 데이터 저장 경로 설정 (v0.2.0+)
 [data]
-log_path = "logs"  # 원하는 폴더명으로 변경 가능 (예: "C:/MyLogs" 또는 "data/memories")
+log_path = "logs"  # 상대경로는 앱 데이터 디렉토리 기준으로 절대경로로 정규화되어 저장될 수 있습니다.
 
 # 키 바인딩 설정 (배열 형태로 입력)
-[keybindings.navigate]
-quit = ["q", "ctrl+q"]
+[keybindings.global]
+quit = ["ctrl+q", "q"]
+focus_timeline = ["h"]
+focus_tasks = ["l"]
+focus_composer = ["i"]
+search = ["/"]
 tags = ["t"]
 pomodoro = ["p"]
+activity = ["g"]
+log_dir = ["o"]
 
-[keybindings.editing]
-save = ["enter"]
-newline = ["shift+enter"]
+[keybindings.composer]
+submit = ["ctrl+s", "ctrl+d"]
+newline = ["enter"]
 cancel = ["esc"]
+clear = ["ctrl+l"]
 
 # 테마 색상 설정 (색상명 또는 R,G,B)
 [theme]
@@ -151,7 +162,7 @@ border_default = "Yellow"       # 기본 테두리
 text_highlight = "100,60,0"     # 강조 배경색 (R,G,B)
 todo_done = "Green"
 todo_wip = "Red"
- mood = "LightRed"
+mood = "LightRed"
 ```
 
 > **Tip**: `examples/` 폴더에 다양한 테마 샘플(`Warm Sunshine`, `Ocean Blue` 등)이 준비되어 있습니다!

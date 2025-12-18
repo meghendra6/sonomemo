@@ -1,15 +1,12 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use serde::Deserialize;
+use directories::ProjectDirs;
+use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::Path;
+use std::io;
+use std::path::{Path, PathBuf};
 
 pub fn key_match(key: &KeyEvent, bindings: &[String]) -> bool {
-    for binding in bindings {
-        if is_match(key, binding) {
-            return true;
-        }
-    }
-    false
+    bindings.iter().any(|binding| is_match(key, binding))
 }
 
 fn is_match(key: &KeyEvent, binding: &str) -> bool {
@@ -28,45 +25,31 @@ fn is_match(key: &KeyEvent, binding: &str) -> bool {
             "esc" => target_code = KeyCode::Esc,
             "backspace" => target_code = KeyCode::Backspace,
             "tab" => target_code = KeyCode::Tab,
+            "backtab" => target_code = KeyCode::BackTab,
+            "space" => target_code = KeyCode::Char(' '),
             "up" => target_code = KeyCode::Up,
             "down" => target_code = KeyCode::Down,
             "left" => target_code = KeyCode::Left,
             "right" => target_code = KeyCode::Right,
-            // Handle single characters and other keys
+            "home" => target_code = KeyCode::Home,
+            "end" => target_code = KeyCode::End,
+            "pageup" => target_code = KeyCode::PageUp,
+            "pagedown" => target_code = KeyCode::PageDown,
+            "delete" => target_code = KeyCode::Delete,
+            "insert" => target_code = KeyCode::Insert,
             c if c.chars().count() == 1 => {
                 if let Some(ch) = c.chars().next() {
                     target_code = KeyCode::Char(ch);
                 }
             }
-            _ => {} // Ignore unknown parts
+            _ => {}
         }
     }
 
-    // Special case: "shift+enter" -> KeyCode::Enter with Shift modifier
-    // But crossterm might report KeyCode::Char('\n') or similar depending on terminal?
-    // Actually KeyCode::Enter is reported for Enter key.
-
-    // Check modifiers match
-    // Note: We only check if the target modifiers are present.
-    // If user presses Ctrl+Shift+C but binding says "Ctrl+C", strictly it's not a match?
-    // Let's assume strict match for modifiers except maybe ignoring NumLock/CapsLock.
-
-    // Relaxed check: key code matches and required modifiers are present.
-    // Allow extra modifiers? No, simpler to be strict.
-
     if key.code != target_code {
-        // Special handling for KeyCode::Char vs shifted char
-        // e.g. binding "H" (implicitly shift+h) vs key "h"
-        // Current parser lowercases everything: "q" -> Char('q').
-        // If user presses 'Q' (Shift+q), crossterm reports Char('Q') and Shift modifier.
-        // But my parser sets target code to 'q'.
-
         if let KeyCode::Char(c) = key.code {
             if let KeyCode::Char(tc) = target_code {
                 if c.to_lowercase().next() == Some(tc) {
-                    // Chars match case-insensitively, now check modifiers
-                    // If binding specified "shift", target_modifiers has SHIFT.
-                    // If user pressed Shift, key.modifiers has SHIFT.
                     return key.modifiers.contains(target_modifiers);
                 }
             }
@@ -77,77 +60,205 @@ fn is_match(key: &KeyEvent, binding: &str) -> bool {
     key.modifiers.contains(target_modifiers)
 }
 
-#[derive(Debug, Deserialize, Clone, Default)]
+fn project_dirs() -> Option<ProjectDirs> {
+    ProjectDirs::from("com", "sonohoshi", "sonomemo")
+}
+
+fn default_data_dir() -> PathBuf {
+    if let Some(path) = std::env::var_os("SONOMEMO_DATA_DIR") {
+        return PathBuf::from(path);
+    }
+    if let Some(dirs) = project_dirs() {
+        return dirs.data_dir().to_path_buf();
+    }
+    std::env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join(".sonomemo")
+}
+
+fn default_log_dir() -> PathBuf {
+    if let Some(path) = std::env::var_os("SONOMEMO_LOG_DIR") {
+        return PathBuf::from(path);
+    }
+    default_data_dir().join("logs")
+}
+
+pub fn config_path() -> PathBuf {
+    if let Some(path) = std::env::var_os("SONOMEMO_CONFIG") {
+        return PathBuf::from(path);
+    }
+    if let Some(dirs) = project_dirs() {
+        return dirs.config_dir().join("config.toml");
+    }
+    std::env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join(".sonomemo-config.toml")
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(default)]
 pub struct Config {
-    #[serde(default)]
-    pub placeholders: Placeholders,
-    #[serde(default)]
-    pub help: HelpMessages,
-    #[serde(default)]
     pub keybindings: KeyBindings,
-    #[serde(default)]
     pub theme: Theme,
-    #[serde(default)]
     pub data: DataConfig,
+    pub pomodoro: PomodoroConfig,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(default)]
 pub struct DataConfig {
-    pub log_path: String,
+    pub log_path: PathBuf,
 }
 
-#[derive(Debug, Deserialize, Clone)]
-pub struct Placeholders {
-    pub navigate: String,
-    pub editing: String,
-    pub search: String,
+impl Default for DataConfig {
+    fn default() -> Self {
+        Self {
+            log_path: default_log_dir(),
+        }
+    }
 }
 
-#[derive(Debug, Deserialize, Clone)]
-pub struct HelpMessages {
-    pub navigate: String,
-    pub editing: String,
-    pub search: String,
-}
-
-#[derive(Debug, Deserialize, Clone, Default)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(default)]
 pub struct KeyBindings {
-    #[serde(default)]
-    pub navigate: NavigateBindings,
-    #[serde(default)]
-    pub editing: EditingBindings,
-    #[serde(default)]
+    pub global: GlobalBindings,
+    pub timeline: TimelineBindings,
+    pub tasks: TasksBindings,
+    pub composer: ComposerBindings,
     pub search: SearchBindings,
-    #[serde(default)]
     pub popup: PopupBindings,
 }
 
-#[derive(Debug, Deserialize, Clone)]
-pub struct NavigateBindings {
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(default)]
+pub struct GlobalBindings {
     pub quit: Vec<String>,
-    pub tags: Vec<String>,
-    pub insert: Vec<String>,
+    pub help: Vec<String>,
+    pub focus_timeline: Vec<String>,
+    pub focus_tasks: Vec<String>,
+    pub focus_composer: Vec<String>,
+    pub focus_next: Vec<String>,
+    pub focus_prev: Vec<String>,
     pub search: Vec<String>,
+    pub tags: Vec<String>,
+    pub activity: Vec<String>,
+    pub log_dir: Vec<String>,
     pub pomodoro: Vec<String>,
-    pub graph: Vec<String>,
+}
+
+impl Default for GlobalBindings {
+    fn default() -> Self {
+        Self {
+            quit: vec!["ctrl+q".to_string(), "q".to_string()],
+            help: vec!["?".to_string()],
+            focus_timeline: vec!["h".to_string()],
+            focus_tasks: vec!["l".to_string()],
+            focus_composer: vec!["i".to_string()],
+            focus_next: vec!["tab".to_string()],
+            focus_prev: vec!["backtab".to_string()],
+            search: vec!["/".to_string()],
+            tags: vec!["t".to_string()],
+            activity: vec!["g".to_string()],
+            log_dir: vec!["o".to_string()],
+            pomodoro: vec!["p".to_string()],
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(default)]
+pub struct TimelineBindings {
+    pub up: Vec<String>,
+    pub down: Vec<String>,
+    pub page_up: Vec<String>,
+    pub page_down: Vec<String>,
+    pub top: Vec<String>,
+    pub bottom: Vec<String>,
     pub toggle_todo: Vec<String>,
-    pub path: Vec<String>,
+    pub open: Vec<String>,
+    pub edit: Vec<String>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
-pub struct EditingBindings {
-    pub save: Vec<String>,    // Enter
-    pub newline: Vec<String>, // Shift+Enter
-    pub cancel: Vec<String>,  // Esc
+impl Default for TimelineBindings {
+    fn default() -> Self {
+        Self {
+            up: vec!["k".to_string(), "up".to_string()],
+            down: vec!["j".to_string(), "down".to_string()],
+            page_up: vec!["ctrl+u".to_string(), "pageup".to_string()],
+            page_down: vec!["ctrl+d".to_string(), "pagedown".to_string()],
+            top: vec!["home".to_string()],
+            bottom: vec!["end".to_string()],
+            toggle_todo: vec!["enter".to_string(), "space".to_string()],
+            open: vec!["enter".to_string()],
+            edit: vec!["e".to_string()],
+        }
+    }
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(default)]
+pub struct TasksBindings {
+    pub up: Vec<String>,
+    pub down: Vec<String>,
+    pub toggle: Vec<String>,
+    pub start_pomodoro: Vec<String>,
+    pub open: Vec<String>,
+    pub edit: Vec<String>,
+}
+
+impl Default for TasksBindings {
+    fn default() -> Self {
+        Self {
+            up: vec!["k".to_string(), "up".to_string()],
+            down: vec!["j".to_string(), "down".to_string()],
+            toggle: vec!["space".to_string(), "enter".to_string()],
+            start_pomodoro: vec!["p".to_string()],
+            open: vec!["enter".to_string()],
+            edit: vec!["e".to_string()],
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(default)]
+pub struct ComposerBindings {
+    pub submit: Vec<String>,
+    pub newline: Vec<String>,
+    pub cancel: Vec<String>,
+    pub clear: Vec<String>,
+}
+
+impl Default for ComposerBindings {
+    fn default() -> Self {
+        Self {
+            cancel: vec!["esc".to_string()],
+            newline: vec!["enter".to_string()],
+            submit: vec!["ctrl+s".to_string(), "ctrl+d".to_string()],
+            clear: vec!["ctrl+l".to_string()],
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(default)]
 pub struct SearchBindings {
     pub submit: Vec<String>,
     pub cancel: Vec<String>,
+    pub clear: Vec<String>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+impl Default for SearchBindings {
+    fn default() -> Self {
+        Self {
+            submit: vec!["enter".to_string()],
+            cancel: vec!["esc".to_string()],
+            clear: vec!["ctrl+l".to_string()],
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(default)]
 pub struct PopupBindings {
     pub confirm: Vec<String>,
     pub cancel: Vec<String>,
@@ -155,7 +266,19 @@ pub struct PopupBindings {
     pub down: Vec<String>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+impl Default for PopupBindings {
+    fn default() -> Self {
+        Self {
+            confirm: vec!["enter".to_string(), "y".to_string()],
+            cancel: vec!["esc".to_string(), "n".to_string()],
+            up: vec!["k".to_string(), "up".to_string()],
+            down: vec!["j".to_string(), "down".to_string()],
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(default)]
 pub struct Theme {
     pub border_default: String,
     pub border_editing: String,
@@ -169,81 +292,6 @@ pub struct Theme {
     pub timestamp: String,
 }
 
-impl Default for DataConfig {
-    fn default() -> Self {
-        Self {
-            log_path: "logs".to_string(),
-        }
-    }
-}
-
-impl Default for Placeholders {
-    fn default() -> Self {
-        Self {
-            navigate: "키를 눌러 각종 기능을 사용하세요...".to_string(),
-            editing: "여기에 메모를 입력하세요...".to_string(),
-            search: "검색할 단어를 입력하세요...".to_string(),
-        }
-    }
-}
-
-impl Default for HelpMessages {
-    fn default() -> Self {
-        Self {
-            navigate:
-                " [i] Edit  [t] Tag  [?] Search  [Enter] Toggle  [p] Pomodoro  [g] Graph  [q] Quit "
-                    .to_string(),
-            editing: " [Esc] Navigate Mode  [Enter] Save Memo  [Shift+Enter] New Line ".to_string(),
-            search: " [Esc] Reset Search  [Enter] Filter ".to_string(),
-        }
-    }
-}
-
-impl Default for NavigateBindings {
-    fn default() -> Self {
-        Self {
-            quit: vec!["q".to_string(), "ㅂ".to_string()],
-            tags: vec!["t".to_string(), "ㅅ".to_string()],
-            insert: vec!["i".to_string(), "ㅑ".to_string()],
-            search: vec!["?".to_string()],
-            pomodoro: vec!["p".to_string(), "ㅔ".to_string()],
-            graph: vec!["g".to_string(), "ㅎ".to_string()],
-            toggle_todo: vec!["enter".to_string()],
-            path: vec!["l".to_string(), "ㅣ".to_string()],
-        }
-    }
-}
-
-impl Default for EditingBindings {
-    fn default() -> Self {
-        Self {
-            save: vec!["enter".to_string()],
-            newline: vec!["shift+enter".to_string()],
-            cancel: vec!["esc".to_string()],
-        }
-    }
-}
-
-impl Default for SearchBindings {
-    fn default() -> Self {
-        Self {
-            submit: vec!["enter".to_string()],
-            cancel: vec!["esc".to_string()],
-        }
-    }
-}
-
-impl Default for PopupBindings {
-    fn default() -> Self {
-        Self {
-            confirm: vec!["enter".to_string(), "y".to_string(), "ㅛ".to_string()],
-            cancel: vec!["esc".to_string(), "n".to_string(), "ㅜ".to_string()],
-            up: vec!["up".to_string()],
-            down: vec!["down".to_string()],
-        }
-    }
-}
-
 impl Default for Theme {
     fn default() -> Self {
         Self {
@@ -251,7 +299,7 @@ impl Default for Theme {
             border_editing: "Green".to_string(),
             border_search: "Cyan".to_string(),
             border_todo_header: "Yellow".to_string(),
-            text_highlight: "50,50,50".to_string(), // RGB background
+            text_highlight: "50,50,50".to_string(),
             todo_done: "Green".to_string(),
             todo_wip: "Red".to_string(),
             tag: "Yellow".to_string(),
@@ -261,18 +309,74 @@ impl Default for Theme {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(default)]
+pub struct PomodoroConfig {
+    pub work_minutes: u64,
+    pub short_break_minutes: u64,
+    pub long_break_minutes: u64,
+    pub long_break_every: u64,
+    pub alert_seconds: u64,
+}
+
+impl Default for PomodoroConfig {
+    fn default() -> Self {
+        Self {
+            work_minutes: 25,
+            short_break_minutes: 5,
+            long_break_minutes: 15,
+            long_break_every: 4,
+            alert_seconds: 5,
+        }
+    }
+}
+
 impl Config {
     pub fn load() -> Self {
-        let config_path = Path::new("config.toml");
-        if config_path.exists() {
-            if let Ok(content) = fs::read_to_string(config_path) {
-                if let Ok(config) = toml::from_str(&content) {
-                    return config;
-                } else {
-                    eprintln!("Failed to parse config.toml, using defaults.");
+        let config_path = config_path();
+
+        let mut config = if let Ok(content) = fs::read_to_string(&config_path) {
+            match toml::from_str::<Config>(&content) {
+                Ok(config) => config,
+                Err(e) => {
+                    eprintln!("Failed to parse config.toml ({config_path:?}), using defaults: {e}");
+                    Config::default()
                 }
             }
+        } else {
+            Config::default()
+        };
+
+        let changed = config.normalize_paths();
+
+        if changed || !config_path.exists() {
+            let _ = config.save_to_path(&config_path);
         }
-        Self::default()
+
+        config
+    }
+
+    pub fn save_to_path(&self, path: &Path) -> io::Result<()> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let content = toml::to_string_pretty(self).unwrap_or_default();
+        fs::write(path, content)
+    }
+
+    fn normalize_paths(&mut self) -> bool {
+        let mut changed = false;
+
+        if self.data.log_path.as_os_str().is_empty() {
+            self.data.log_path = default_log_dir();
+            changed = true;
+        }
+
+        if self.data.log_path.is_relative() {
+            self.data.log_path = default_data_dir().join(&self.data.log_path);
+            changed = true;
+        }
+
+        changed
     }
 }

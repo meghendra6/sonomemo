@@ -3,8 +3,9 @@ use crate::ui::color_parser::parse_color;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
-    text::{Line, Span},
+    text::Span,
 };
+use unicode_width::UnicodeWidthStr;
 
 // 팝업 위치 계산 헬퍼
 pub fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
@@ -27,106 +28,339 @@ pub fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
         .split(popup_layout[1])[1]
 }
 
-pub fn parse_log_line(text: &str, theme: &Theme) -> Line<'static> {
-    let mut spans = Vec::new();
+pub fn parse_markdown_spans(text: &str, theme: &Theme, in_code_block: bool) -> Vec<Span<'static>> {
+    let mut spans: Vec<Span<'static>> = Vec::new();
 
-    // 타임스탬프 처리 [HH:MM:SS]
-    let parts: Vec<&str> = text.splitn(2, "] ").collect();
-    if parts.len() == 2 && parts[0].starts_with('[') {
-        let timestamp_color = parse_color(&theme.timestamp);
-        spans.push(Span::styled(
-            format!("{}] ", parts[0]),
-            Style::default().fg(timestamp_color),
-        ));
-
-        let content = parts[1];
-
-        // TODO 체크박스 처리
-        let (content, todo_prefix) = if let Some(stripped) = content.strip_prefix("- [ ] ") {
-            let color = parse_color(&theme.todo_wip);
-            spans.push(Span::styled("⬜ ", Style::default().fg(color))); // 미완료 이모지
-            (stripped, true)
-        } else if let Some(stripped) = content.strip_prefix("- [x] ") {
-            let color = parse_color(&theme.todo_done);
-            spans.push(Span::styled("✅ ", Style::default().fg(color))); // 완료 이모지
-            (stripped, true)
-        } else {
-            (content, false)
-        };
-
-        // 태그 파싱 (#단어)
-        static URL_REGEX: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-        let url_regex = URL_REGEX.get_or_init(|| {
-            regex::Regex::new(r"https?://[-a-zA-Z0-9+&@#/%?=~_|!:,.;]*[-a-zA-Z0-9+&@#/%=~_|]")
-                .unwrap()
-        });
-
-        for (i, word) in content.split_whitespace().enumerate() {
-            if i > 0 {
-                spans.push(Span::raw(" ".to_string()));
-            }
-            if word.starts_with('#') {
-                let tag_color = parse_color(&theme.tag);
-                spans.push(Span::styled(
-                    word.to_string(),
-                    Style::default().fg(tag_color).add_modifier(Modifier::BOLD),
-                ));
-            } else if word.starts_with("Mood:") {
-                let mood_color = parse_color(&theme.mood);
-                spans.push(Span::styled(
-                    "🎭 Mood:",
-                    Style::default()
-                        .fg(mood_color)
-                        .add_modifier(Modifier::ITALIC),
-                ));
-            } else if let Some(mat) = url_regex.find(word) {
-                let start = mat.start();
-                let end = mat.end();
-
-                // URL 앞부분 (괄호 등)
-                if start > 0 {
-                    spans.push(Span::styled(
-                        word[..start].to_string(),
-                        if todo_prefix {
-                            Style::default().fg(Color::Reset)
-                        } else {
-                            Style::default()
-                        },
-                    ));
-                }
-
-                // URL 본문
-                spans.push(Span::styled(
-                    word[start..end].to_string(),
-                    Style::default()
-                        .fg(Color::Blue)
-                        .add_modifier(Modifier::UNDERLINED),
-                ));
-
-                // URL 뒷부분
-                if end < word.len() {
-                    spans.push(Span::styled(
-                        word[end..].to_string(),
-                        if todo_prefix {
-                            Style::default().fg(Color::Reset)
-                        } else {
-                            Style::default()
-                        },
-                    ));
-                }
-            } else if todo_prefix {
-                spans.push(Span::styled(
-                    word.to_string(),
-                    Style::default().fg(Color::Reset),
-                ));
-            } else {
-                spans.push(Span::raw(word.to_string()));
-            }
-        }
-    } else {
-        // 형식이 없는 일반 텍스트
-        spans.push(Span::raw(text.to_string()));
+    let leading_len = text.len().saturating_sub(text.trim_start().len());
+    if leading_len > 0 {
+        spans.push(Span::raw(text[..leading_len].to_string()));
     }
 
-    Line::from(spans)
+    let content = text.trim_start();
+    if content.is_empty() {
+        return spans;
+    }
+
+    // Fenced code blocks: render as-is with a distinct style.
+    if in_code_block || content.starts_with("```") {
+        spans.push(Span::styled(
+            content.to_string(),
+            Style::default()
+                .fg(Color::LightCyan)
+                .add_modifier(Modifier::BOLD),
+        ));
+        return spans;
+    }
+
+    // Headings (# ...): bold + slightly brighter.
+    if let Some(stripped) = heading_text(content) {
+        spans.push(Span::styled(
+            stripped.to_string(),
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        ));
+        return spans;
+    }
+
+    // TODO checkboxes at line start.
+    // Keep display width comparable to the original "- [ ] " / "- [x] " prefix for cleaner wrapping.
+    let (content, todo_prefix) = if let Some(stripped) = content.strip_prefix("- [ ] ") {
+        let color = parse_color(&theme.todo_wip);
+        spans.push(Span::styled("• [ ] ", Style::default().fg(color)));
+        (stripped, true)
+    } else if let Some(stripped) = content.strip_prefix("- [x] ") {
+        let color = parse_color(&theme.todo_done);
+        spans.push(Span::styled("• [✓] ", Style::default().fg(color)));
+        (stripped, true)
+    } else if let Some(stripped) = content.strip_prefix("- [X] ") {
+        let color = parse_color(&theme.todo_done);
+        spans.push(Span::styled("• [✓] ", Style::default().fg(color)));
+        (stripped, true)
+    } else {
+        (content, false)
+    };
+
+    let (content, todo_prefix) = if todo_prefix {
+        (content, todo_prefix)
+    } else if let Some(stripped) = content.strip_prefix("- ") {
+        let bullet = bullet_for_level(leading_len);
+        spans.push(Span::styled(
+            format!("{bullet} "),
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        ));
+        (stripped, false)
+    } else if let Some(stripped) = content.strip_prefix("* ") {
+        let bullet = bullet_for_level(leading_len);
+        spans.push(Span::styled(
+            format!("{bullet} "),
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        ));
+        (stripped, false)
+    } else if let Some(stripped) = content.strip_prefix("+ ") {
+        let bullet = bullet_for_level(leading_len);
+        spans.push(Span::styled(
+            format!("{bullet} "),
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        ));
+        (stripped, false)
+    } else if let Some((marker, stripped)) = split_ordered_list_marker(content) {
+        spans.push(Span::styled(
+            marker,
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::raw(" ".to_string()));
+        (stripped, false)
+    } else {
+        (content, false)
+    };
+
+    // Inline code: split on backticks and style code segments.
+    let mut is_code = false;
+    for segment in content.split('`') {
+        if is_code {
+            spans.push(Span::styled(
+                segment.to_string(),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ));
+        } else {
+            spans.extend(parse_words(segment, theme, todo_prefix));
+        }
+        is_code = !is_code;
+    }
+
+    spans
+}
+
+fn bullet_for_level(leading_spaces: usize) -> char {
+    // Markdown list nesting is usually 2 or 4 spaces; treat 2 spaces as one level.
+    let level = leading_spaces / 2;
+    match level {
+        0 => '•',
+        1 => '◦',
+        2 => '▪',
+        _ => '▫',
+    }
+}
+
+fn split_ordered_list_marker(line: &str) -> Option<(String, &str)> {
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        i += 1;
+    }
+    if i == 0 || i + 1 >= bytes.len() {
+        return None;
+    }
+
+    let punct = bytes[i];
+    if (punct == b'.' || punct == b')') && bytes[i + 1] == b' ' {
+        // Safe because digits/punct are ASCII.
+        Some((line[..i + 1].to_string(), &line[i + 2..]))
+    } else {
+        None
+    }
+}
+
+fn heading_text(line: &str) -> Option<&str> {
+    let trimmed = line.trim_start();
+    let level = trimmed.chars().take_while(|&c| c == '#').count();
+    if level == 0 {
+        return None;
+    }
+    let after = &trimmed[level..];
+    if after.starts_with(' ') {
+        Some(trimmed)
+    } else {
+        None
+    }
+}
+
+fn parse_words(text: &str, theme: &Theme, todo_prefix: bool) -> Vec<Span<'static>> {
+    let mut spans: Vec<Span<'static>> = Vec::new();
+
+    // URL parsing
+    static URL_REGEX: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let url_regex = URL_REGEX.get_or_init(|| {
+        regex::Regex::new(r"https?://[-a-zA-Z0-9+&@#/%?=~_|!:,.;]*[-a-zA-Z0-9+&@#/%=~_|]").unwrap()
+    });
+
+    for (i, word) in text.split_whitespace().enumerate() {
+        if i > 0 {
+            spans.push(Span::raw(" ".to_string()));
+        }
+
+        if word.starts_with('#') {
+            let tag_color = parse_color(&theme.tag);
+            spans.push(Span::styled(
+                word.to_string(),
+                Style::default().fg(tag_color).add_modifier(Modifier::BOLD),
+            ));
+            continue;
+        }
+
+        if word.starts_with("Mood:") {
+            let mood_color = parse_color(&theme.mood);
+            spans.push(Span::styled(
+                "🎭 Mood:",
+                Style::default()
+                    .fg(mood_color)
+                    .add_modifier(Modifier::ITALIC),
+            ));
+            continue;
+        }
+
+        if let Some(mat) = url_regex.find(word) {
+            let start = mat.start();
+            let end = mat.end();
+
+            if start > 0 {
+                spans.push(Span::styled(
+                    word[..start].to_string(),
+                    if todo_prefix {
+                        Style::default().fg(Color::Reset)
+                    } else {
+                        Style::default()
+                    },
+                ));
+            }
+
+            spans.push(Span::styled(
+                word[start..end].to_string(),
+                Style::default()
+                    .fg(Color::Blue)
+                    .add_modifier(Modifier::UNDERLINED),
+            ));
+
+            if end < word.len() {
+                spans.push(Span::styled(
+                    word[end..].to_string(),
+                    if todo_prefix {
+                        Style::default().fg(Color::Reset)
+                    } else {
+                        Style::default()
+                    },
+                ));
+            }
+            continue;
+        }
+
+        if todo_prefix {
+            spans.push(Span::styled(
+                word.to_string(),
+                Style::default().fg(Color::Reset),
+            ));
+        } else {
+            spans.push(Span::raw(word.to_string()));
+        }
+    }
+
+    spans
+}
+
+pub fn wrap_markdown_line(text: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return vec![text.to_string()];
+    }
+
+    let (prefix, rest, prefix_width) = split_markdown_prefix(text);
+
+    // When the prefix already eats the whole line, wrapping can't help.
+    if prefix_width >= width {
+        return vec![format!("{prefix}{rest}")];
+    }
+
+    let available = width.saturating_sub(prefix_width).max(1);
+    let wrapped = textwrap::wrap(rest, available);
+
+    if wrapped.is_empty() {
+        return vec![prefix];
+    }
+
+    let mut out = Vec::with_capacity(wrapped.len());
+    for (i, part) in wrapped.iter().enumerate() {
+        if i == 0 {
+            out.push(format!("{prefix}{part}"));
+        } else {
+            out.push(format!("{}{}", " ".repeat(prefix_width), part));
+        }
+    }
+    out
+}
+
+fn split_markdown_prefix(text: &str) -> (String, &str, usize) {
+    let (leading, rest) = normalize_leading_whitespace(text);
+
+    if let Some((marker, tail)) = split_ordered_list_marker(rest) {
+        let mut prefix = leading;
+        prefix.push_str(&marker);
+        prefix.push(' ');
+        let width = UnicodeWidthStr::width(prefix.as_str());
+        return (prefix, tail, width);
+    }
+
+    let (marker, tail) = split_list_marker(rest);
+
+    let mut prefix = leading;
+    prefix.push_str(marker);
+    let width = UnicodeWidthStr::width(prefix.as_str());
+    (prefix, tail, width)
+}
+
+fn normalize_leading_whitespace(text: &str) -> (String, &str) {
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    let mut out = String::new();
+
+    while i < bytes.len() {
+        match bytes[i] {
+            b' ' => {
+                out.push(' ');
+                i += 1;
+            }
+            b'\t' => {
+                out.push_str("    ");
+                i += 1;
+            }
+            _ => break,
+        }
+    }
+
+    // Safe because i stops on ASCII whitespace boundaries.
+    let rest = &text[i..];
+    (out, rest)
+}
+
+fn split_list_marker(text: &str) -> (&'static str, &str) {
+    if let Some(rest) = text.strip_prefix("- [ ] ") {
+        return ("- [ ] ", rest);
+    }
+    if let Some(rest) = text.strip_prefix("- [x] ") {
+        return ("- [x] ", rest);
+    }
+    if let Some(rest) = text.strip_prefix("- [X] ") {
+        return ("- [X] ", rest);
+    }
+
+    if let Some(rest) = text.strip_prefix("- ") {
+        return ("- ", rest);
+    }
+    if let Some(rest) = text.strip_prefix("* ") {
+        return ("* ", rest);
+    }
+    if let Some(rest) = text.strip_prefix("+ ") {
+        return ("+ ", rest);
+    }
+
+    ("", text)
 }
