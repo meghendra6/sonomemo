@@ -4,7 +4,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, List, ListItem, Paragraph},
+    widgets::{Block, BorderType, Borders, List, ListItem, Paragraph},
 };
 
 use crate::app::App;
@@ -200,6 +200,11 @@ pub fn ui(f: &mut Frame, app: &mut App) {
     let logs_block =
         Block::default()
             .borders(Borders::ALL)
+            .border_type(if is_timeline_focused {
+                BorderType::Thick
+            } else {
+                BorderType::Plain
+            })
             .border_style(Style::default().fg(main_border_color).add_modifier(
                 if is_timeline_focused {
                     Modifier::BOLD
@@ -297,6 +302,11 @@ pub fn ui(f: &mut Frame, app: &mut App) {
     let todo_block = Block::default()
         .borders(Borders::ALL)
         .title(todo_title)
+        .border_type(if is_tasks_focused {
+            BorderType::Thick
+        } else {
+            BorderType::Plain
+        })
         .border_style(todo_border_style);
 
     let highlight_bg = parse_color(&app.config.theme.text_highlight);
@@ -354,6 +364,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             let block = Block::default()
                 .borders(Borders::ALL)
                 .title(" Status ")
+                .border_type(BorderType::Plain)
                 .border_style(Style::default().fg(border_color));
             f.render_widget(
                 Paragraph::new(status)
@@ -376,6 +387,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             let input_block = Block::default()
                 .borders(Borders::ALL)
                 .title(input_title)
+                .border_type(BorderType::Thick)
                 .border_style(Style::default().fg(border_color));
 
             app.textarea.set_block(input_block);

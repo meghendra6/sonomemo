@@ -106,6 +106,8 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::Result<
 }
 
 fn check_timers(app: &mut App) {
+    handle_day_rollover(app);
+
     if let Some(end_time) = app.pomodoro_end {
         if Local::now() >= end_time {
             app.pomodoro_end = None; // 타이머 종료
@@ -142,6 +144,30 @@ fn check_timers(app: &mut App) {
             app.toast_message = None;
         }
     }
+}
+
+fn handle_day_rollover(app: &mut App) {
+    let today = Local::now().format("%Y-%m-%d").to_string();
+    if today == app.active_date {
+        return;
+    }
+
+    // Policy: Pomodoro timers are in-memory only. On day change, running timers are reset.
+    app.active_date = today;
+    app.pomodoro_end = None;
+    app.pomodoro_target = None;
+    app.pomodoro_alert_expiry = None;
+    app.pomodoro_alert_message = None;
+    app.show_pomodoro_popup = false;
+    app.pomodoro_pending_task = None;
+    app.pomodoro_minutes_input.clear();
+
+    // Day change invalidates search context in practice (different file set).
+    app.is_search_result = false;
+    app.last_search_query = None;
+
+    app.update_logs();
+    app.toast("New day detected: refreshed logs/tasks and reset pomodoro.");
 }
 
 fn handle_key_input(app: &mut App, key: event::KeyEvent) {
@@ -504,7 +530,7 @@ fn handle_editing_mode(app: &mut App, key: event::KeyEvent) {
         app.textarea = tui_textarea::TextArea::default();
         app.transition_to(InputMode::Editing);
     } else if key_match(&key, &app.config.keybindings.composer.newline) {
-        app.textarea.insert_newline();
+        insert_newline_with_auto_indent(&mut app.textarea);
     } else if key_match(&key, &app.config.keybindings.composer.submit) {
         let lines = app.textarea.lines().to_vec();
         let is_empty = lines.iter().all(|l| l.trim().is_empty());
@@ -659,6 +685,116 @@ fn handle_pomodoro_popup(app: &mut App, key: event::KeyEvent) {
         }
         _ => {}
     }
+}
+
+fn insert_newline_with_auto_indent(textarea: &mut tui_textarea::TextArea) {
+    let (row, _) = textarea.cursor();
+    let current_line = textarea.lines().get(row).map(|s| s.as_str()).unwrap_or("");
+
+    let prefix = list_continuation_prefix(current_line);
+    textarea.insert_newline();
+    if !prefix.is_empty() {
+        textarea.insert_str(prefix);
+    }
+}
+
+fn list_continuation_prefix(line: &str) -> String {
+    let (indent_level, rest) = parse_indent_level(line);
+    let indent = "  ".repeat(indent_level);
+
+    if let Some((_marker, content)) = checkbox_marker(rest) {
+        if content.trim().is_empty() {
+            return indent;
+        }
+        // Always continue checklists as unchecked by default.
+        return format!("{indent}- [ ] ");
+    }
+
+    if let Some((marker, content)) = bullet_marker(rest) {
+        if content.trim().is_empty() {
+            return indent;
+        }
+        return format!("{indent}{marker}");
+    }
+
+    if let Some((next_marker, content)) = ordered_list_next_marker(rest) {
+        if content.trim().is_empty() {
+            return indent;
+        }
+        return format!("{indent}{next_marker}");
+    }
+
+    String::new()
+}
+
+fn parse_indent_level(line: &str) -> (usize, &str) {
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    let mut spaces = 0usize;
+    while i < bytes.len() {
+        match bytes[i] {
+            b' ' => {
+                i += 1;
+                spaces += 1;
+            }
+            b'\t' => {
+                i += 1;
+                spaces += 4;
+            }
+            _ => break,
+        }
+    }
+    let rest = &line[i..];
+    (spaces / 2, rest)
+}
+
+fn checkbox_marker(rest: &str) -> Option<(&'static str, &str)> {
+    if let Some(content) = rest.strip_prefix("- [ ] ") {
+        return Some(("- [ ] ", content));
+    }
+    if let Some(content) = rest.strip_prefix("- [x] ") {
+        return Some(("- [x] ", content));
+    }
+    if let Some(content) = rest.strip_prefix("- [X] ") {
+        return Some(("- [X] ", content));
+    }
+    None
+}
+
+fn bullet_marker(rest: &str) -> Option<(&'static str, &str)> {
+    if let Some(content) = rest.strip_prefix("- ") {
+        return Some(("- ", content));
+    }
+    if let Some(content) = rest.strip_prefix("* ") {
+        return Some(("* ", content));
+    }
+    if let Some(content) = rest.strip_prefix("+ ") {
+        return Some(("+ ", content));
+    }
+    None
+}
+
+fn ordered_list_next_marker(rest: &str) -> Option<(String, &str)> {
+    let bytes = rest.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        i += 1;
+    }
+    if i == 0 || i + 1 >= bytes.len() {
+        return None;
+    }
+
+    let punct = bytes[i];
+    if (punct != b'.' && punct != b')') || bytes[i + 1] != b' ' {
+        return None;
+    }
+
+    let n: usize = rest[..i].parse().ok()?;
+    let next = n.saturating_add(1);
+    let punct_char = punct as char;
+    let next_marker = format!("{}{punct_char} ", next);
+    let content = &rest[i + 2..];
+    Some((next_marker, content))
 }
 
 fn handle_path_popup(app: &mut App, key: event::KeyEvent) {

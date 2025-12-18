@@ -26,6 +26,7 @@ pub struct App<'a> {
     pub textarea: TextArea<'a>,
     pub textarea_viewport_row: u16,
     pub textarea_viewport_col: u16,
+    pub active_date: String,
     pub logs: Vec<LogEntry>,
     pub logs_state: ListState,
     pub editing_entry: Option<EditingEntry>,
@@ -73,6 +74,8 @@ pub struct App<'a> {
 impl<'a> App<'a> {
     pub fn new() -> App<'a> {
         let config = Config::load();
+
+        let active_date = Local::now().format("%Y-%m-%d").to_string();
 
         let mut textarea = TextArea::default();
         textarea.set_placeholder_text(PLACEHOLDER_COMPOSE);
@@ -128,6 +131,7 @@ impl<'a> App<'a> {
             textarea,
             textarea_viewport_row: 0,
             textarea_viewport_col: 0,
+            active_date,
             logs,
             logs_state,
             editing_entry: None,
