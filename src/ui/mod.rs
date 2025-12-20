@@ -280,7 +280,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
 
         let summary = format!("Entries {} · {}", app.logs.len(), stats_summary);
 
-        format!(" {focus_mark_timeline} SONOMEMO · {time} · {summary}{pomodoro} ")
+        format!(" {focus_mark_timeline} MEMOLOG · {time} · {summary}{pomodoro} ")
     };
 
     // Border color based on current mode

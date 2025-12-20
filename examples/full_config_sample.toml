@@ -1,6 +1,6 @@
-# Full Configuration Sample (Sonomemo)
-# By default, Sonomemo loads `config.toml` from the OS config directory.
-# If you want to use a local file, run with: `SONOMEMO_CONFIG=./config.toml`
+# Full Configuration Sample (MemoLog)
+# By default, MemoLog loads `config.toml` from the OS config directory.
+# If you want to use a local file, run with: `MEMOLOG_CONFIG=./config.toml`
 # You can override only what you need; missing values fall back to defaults.
 
 [data]

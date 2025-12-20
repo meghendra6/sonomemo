@@ -577,7 +577,7 @@ struct AppState {
 
 fn state_dir_path(log_path: &Path) -> PathBuf {
     let mut dir = PathBuf::from(log_path);
-    dir.push(".sonomemo");
+    dir.push(".memolog");
     dir
 }
 

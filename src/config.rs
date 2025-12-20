@@ -80,11 +80,11 @@ fn is_match(key: &KeyEvent, binding: &str) -> bool {
 }
 
 fn project_dirs() -> Option<ProjectDirs> {
-    ProjectDirs::from("com", "sonohoshi", "sonomemo")
+    ProjectDirs::from("com", "sonohoshi", "memolog")
 }
 
 fn default_data_dir() -> PathBuf {
-    if let Some(path) = std::env::var_os("SONOMEMO_DATA_DIR") {
+    if let Some(path) = std::env::var_os("MEMOLOG_DATA_DIR") {
         return PathBuf::from(path);
     }
     if let Some(dirs) = project_dirs() {
@@ -92,18 +92,18 @@ fn default_data_dir() -> PathBuf {
     }
     std::env::current_dir()
         .unwrap_or_else(|_| PathBuf::from("."))
-        .join(".sonomemo")
+        .join(".memolog")
 }
 
 fn default_log_dir() -> PathBuf {
-    if let Some(path) = std::env::var_os("SONOMEMO_LOG_DIR") {
+    if let Some(path) = std::env::var_os("MEMOLOG_LOG_DIR") {
         return PathBuf::from(path);
     }
     default_data_dir().join("logs")
 }
 
 pub fn config_path() -> PathBuf {
-    if let Some(path) = std::env::var_os("SONOMEMO_CONFIG") {
+    if let Some(path) = std::env::var_os("MEMOLOG_CONFIG") {
         return PathBuf::from(path);
     }
     if let Some(dirs) = project_dirs() {
@@ -111,7 +111,7 @@ pub fn config_path() -> PathBuf {
     }
     std::env::current_dir()
         .unwrap_or_else(|_| PathBuf::from("."))
-        .join(".sonomemo-config.toml")
+        .join(".memolog-config.toml")
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
