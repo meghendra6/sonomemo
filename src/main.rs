@@ -510,11 +510,6 @@ fn handle_normal_mode(app: &mut App, key: event::KeyEvent) {
 }
 
 fn handle_search_mode(app: &mut App, key: event::KeyEvent) {
-    if key_match(&key, &app.config.keybindings.global.help) {
-        app.show_help_popup = true;
-        return;
-    }
-
     if key_match(&key, &app.config.keybindings.search.cancel) {
         app.last_search_query = None;
         app.transition_to(InputMode::Navigate);
@@ -544,11 +539,6 @@ fn handle_search_mode(app: &mut App, key: event::KeyEvent) {
 }
 
 fn handle_editing_mode(app: &mut App, key: event::KeyEvent) {
-    if key_match(&key, &app.config.keybindings.global.help) {
-        app.show_help_popup = true;
-        return;
-    }
-
     if key_match(&key, &app.config.keybindings.composer.cancel) {
         app.editing_entry = None;
         app.textarea = tui_textarea::TextArea::default();
