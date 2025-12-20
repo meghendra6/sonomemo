@@ -22,7 +22,7 @@ This project was forked from https://github.com/sonohoshi/sonomemo.
 ### From source
 
 ```bash
-git clone https://github.com/meghendra6/memolog.git
+git clone https://github.com/meghendra6/sonomemo.git memolog
 cd memolog
 cargo install --path .
 ```
