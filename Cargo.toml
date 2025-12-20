@@ -2,10 +2,10 @@
 name = "memolog"
 version = "0.2.0"
 edition = "2024"
-authors = ["sonohoshi"]
-description = "A context logging terminal app designed for ADHD brains."
+authors = ["meghendra"]
+description = "A terminal TUI for logging memories and context notes."
 license = "MIT"
-repository = "https://github.com/sonohoshi/memolog"
+repository = "https://github.com/meghendra6/memolog"
 readme = "README.md"
 categories = ["command-line-utilities", "text-editors"]
 keywords = ["tui", "memo", "note-taking", "productivity", "pomodoro"]

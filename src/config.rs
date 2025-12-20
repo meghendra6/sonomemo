@@ -80,7 +80,7 @@ fn is_match(key: &KeyEvent, binding: &str) -> bool {
 }
 
 fn project_dirs() -> Option<ProjectDirs> {
-    ProjectDirs::from("com", "sonohoshi", "memolog")
+    ProjectDirs::from("com", "meghendra", "memolog")
 }
 
 fn default_data_dir() -> PathBuf {
