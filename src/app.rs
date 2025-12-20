@@ -7,6 +7,7 @@ use crate::storage;
 use chrono::{DateTime, Duration, Local, NaiveDate};
 use ratatui::widgets::ListState;
 use std::collections::HashMap;
+use std::path::Path;
 use tui_textarea::CursorMove;
 use tui_textarea::TextArea;
 
@@ -16,6 +17,8 @@ const PLACEHOLDER_SEARCH: &str = "Search…";
 
 /// Default number of days to load initially (including today)
 const INITIAL_LOAD_DAYS: i64 = 7;
+/// Number of log files to load per infinite-scroll chunk.
+const HISTORY_LOAD_FILE_COUNT: usize = 2;
 
 #[derive(Clone)]
 pub struct EditingEntry {
@@ -36,6 +39,8 @@ pub struct App<'a> {
     pub active_date: String,
     pub logs: Vec<LogEntry>,
     pub logs_state: ListState,
+    /// UI-space list state for Timeline (includes date separators, preserves offset across frames).
+    pub timeline_ui_state: ListState,
     pub editing_entry: Option<EditingEntry>,
     pub tasks: Vec<TaskItem>,
     pub tasks_state: ListState,
@@ -157,6 +162,7 @@ impl<'a> App<'a> {
             active_date,
             logs,
             logs_state,
+            timeline_ui_state: ListState::default(),
             editing_entry: None,
             tasks,
             tasks_state,
@@ -275,7 +281,6 @@ impl<'a> App<'a> {
     }
 
     /// Loads more historical entries when scrolling to the top.
-    /// Loads one additional week at a time.
     pub fn load_more_history(&mut self) {
         if self.is_loading_more || self.is_search_result {
             return;
@@ -286,50 +291,84 @@ impl<'a> App<'a> {
             None => return,
         };
 
-        // Check if there's more history to load
-        let earliest = match self.earliest_available_date {
+        let available_dates =
+            storage::get_available_log_dates(&self.config.data.log_path).unwrap_or_default();
+        let earliest = match available_dates.first().copied() {
             Some(d) => d,
             None => return,
         };
+        self.earliest_available_date = Some(earliest);
 
         if current_start <= earliest {
-            return; // Already loaded all available history
+            self.toast("No more history to load.");
+            return;
         }
 
         self.is_loading_more = true;
         self.toast("⏳ Loading more history...");
 
-        // Load 2 days at a time for smoother scrolling experience
-        let new_start = (current_start - Duration::days(2)).max(earliest);
-        let end_before_current = current_start - Duration::days(1);
-
-        if let Ok(older_logs) = storage::read_entries_for_date_range(
-            &self.config.data.log_path,
-            new_start,
-            end_before_current,
-        ) {
-            if !older_logs.is_empty() {
-                // Prepend older logs to existing logs
-                let old_len = older_logs.len();
-
-                let mut new_logs = older_logs;
-                new_logs.extend(std::mem::take(&mut self.logs));
-                self.logs = new_logs;
-
-                // Keep cursor at what was the first item (now at old_len)
-                // This creates a natural "scroll up" feeling as user can immediately see
-                // the item they were about to reach, and can continue scrolling up
-                self.logs_state.select(Some(old_len));
-
-                self.loaded_start_date = Some(new_start);
-                self.toast(format!("✓ Loaded {} more entries", old_len));
-            } else {
-                self.toast("No more history to load");
-            }
-        } else {
-            self.toast("Failed to load history");
+        let cutoff_index = available_dates.partition_point(|d| *d < current_start);
+        if cutoff_index == 0 {
+            self.toast("No more history to load.");
+            self.is_loading_more = false;
+            return;
         }
 
+        let start_index = cutoff_index.saturating_sub(HISTORY_LOAD_FILE_COUNT);
+        let dates_to_load = &available_dates[start_index..cutoff_index];
+        let new_start = match dates_to_load.first().copied() {
+            Some(d) => d,
+            None => {
+                self.is_loading_more = false;
+                return;
+            }
+        };
+
+        let mut older_logs = Vec::new();
+        for date in dates_to_load {
+            if let Ok(mut day_logs) = storage::read_entries_for_date_range(
+                &self.config.data.log_path,
+                *date,
+                *date,
+            ) {
+                older_logs.append(&mut day_logs);
+            }
+        }
+
+        // Always move the loaded range pointer forward (even if there were no entries).
+        self.loaded_start_date = Some(new_start);
+
+        if older_logs.is_empty() {
+            self.toast("Loaded earlier days (no entries).");
+            self.is_loading_more = false;
+            return;
+        }
+
+        let inserted_entries = older_logs.len();
+        let inserted_separators = count_distinct_entry_dates(&older_logs);
+        let inserted_ui_items = inserted_entries + inserted_separators;
+
+        let prev_selected = self.logs_state.selected().unwrap_or(0);
+        let new_selected = prev_selected.saturating_add(inserted_entries);
+
+        let mut new_logs = older_logs;
+        new_logs.extend(std::mem::take(&mut self.logs));
+        self.logs = new_logs;
+
+        // Preserve selection (same logical entry) after prepending.
+        self.logs_state.select(Some(new_selected));
+
+        // Preserve viewport anchor (same UI item at the top) after prepending.
+        if inserted_ui_items > 0 {
+            if let Some(ui_selected) = self.timeline_ui_state.selected() {
+                self.timeline_ui_state
+                    .select(Some(ui_selected.saturating_add(inserted_ui_items)));
+            }
+            *self.timeline_ui_state.offset_mut() =
+                self.timeline_ui_state.offset().saturating_add(inserted_ui_items);
+        }
+
+        self.toast(format!("✓ Loaded {} more entries", inserted_entries));
         self.is_loading_more = false;
     }
 
@@ -382,6 +421,7 @@ impl<'a> App<'a> {
             return;
         }
         self.logs_state.select(Some(0));
+        *self.timeline_ui_state.offset_mut() = 0;
     }
 
     pub fn scroll_to_bottom(&mut self) {
@@ -524,4 +564,28 @@ fn compute_today_task_stats(logs: &[LogEntry]) -> (usize, usize) {
 /// Checks if a task line contains a carryover date marker (⟦YYYY-MM-DD⟧)
 fn is_carryover_task(text: &str) -> bool {
     text.contains("⟦") && text.contains("⟧")
+}
+
+fn count_distinct_entry_dates(entries: &[LogEntry]) -> usize {
+    let mut last: Option<String> = None;
+    let mut count = 0usize;
+    for entry in entries {
+        let date = file_date(&entry.file_path);
+        if date.is_none() {
+            continue;
+        }
+        let date = date.unwrap();
+        if last.as_ref() != Some(&date) {
+            count += 1;
+            last = Some(date);
+        }
+    }
+    count
+}
+
+fn file_date(file_path: &str) -> Option<String> {
+    Path::new(file_path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_string())
 }

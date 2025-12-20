@@ -321,10 +321,9 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         .highlight_symbol("▶ ")
         .highlight_style(logs_highlight_style);
 
-    // Create a temporary state with UI index for rendering
-    let mut ui_logs_state = ratatui::widgets::ListState::default();
-    ui_logs_state.select(ui_selected_index);
-    f.render_stateful_widget(logs_list, top_chunks[0], &mut ui_logs_state);
+    // Persist list offset across frames to avoid "cursor pinned" scroll behavior.
+    app.timeline_ui_state.select(ui_selected_index);
+    f.render_stateful_widget(logs_list, top_chunks[0], &mut app.timeline_ui_state);
 
     // Right panel: Today's tasks
     let todo_area_width = top_chunks[1].width.saturating_sub(2) as usize;
