@@ -51,9 +51,26 @@ MemoLog loads `config.toml` from the OS config directory by default.
 
 ### Example
 
-See `examples/full_config_sample.toml`.
-
 The repository root also includes a small `config.toml` you can copy and edit.
+
+### Theme
+
+You can customize the UI colors by adding a `[theme]` section to `config.toml`.
+Colors accept the built-in names (case-insensitive) or RGB values in `R,G,B` form.
+
+```toml
+[theme]
+border_default = "Blue"
+border_editing = "Cyan"
+border_search = "LightBlue"
+border_todo_header = "Cyan"
+text_highlight = "0,0,100"
+todo_done = "LightGreen"
+todo_wip = "Magenta"
+tag = "Cyan"
+mood = "Blue"
+timestamp = "LightCyan"
+```
 
 ## Keybindings (defaults)
 
