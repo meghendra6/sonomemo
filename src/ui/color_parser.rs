@@ -37,3 +37,29 @@ pub fn parse_color(s: &str) -> Color {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::parse_color;
+    use ratatui::style::Color;
+
+    #[test]
+    fn parses_named_colors_case_insensitive() {
+        assert_eq!(parse_color("Blue"), Color::Blue);
+        assert_eq!(parse_color("lightcyan"), Color::LightCyan);
+        assert_eq!(parse_color("DaRkGrAy"), Color::DarkGray);
+    }
+
+    #[test]
+    fn parses_rgb_values() {
+        assert_eq!(parse_color("1,2,3"), Color::Rgb(1, 2, 3));
+        assert_eq!(parse_color(" 10 , 20 , 30 "), Color::Rgb(10, 20, 30));
+    }
+
+    #[test]
+    fn invalid_values_fall_back_to_reset() {
+        assert_eq!(parse_color("not-a-color"), Color::Reset);
+        assert_eq!(parse_color("1,2"), Color::Reset);
+        assert_eq!(parse_color("1,2,3,4"), Color::Reset);
+    }
+}

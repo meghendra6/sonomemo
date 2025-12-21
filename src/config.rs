@@ -102,6 +102,13 @@ fn default_log_dir() -> PathBuf {
     default_data_dir().join("logs")
 }
 
+fn theme_table_present(content: &str) -> bool {
+    toml::from_str::<toml::Value>(content)
+        .ok()
+        .and_then(|value| value.get("theme").cloned())
+        .is_some()
+}
+
 pub fn config_path() -> PathBuf {
     if let Some(path) = std::env::var_os("MEMOLOG_CONFIG") {
         return PathBuf::from(path);
@@ -313,6 +320,8 @@ pub struct Theme {
     pub tag: String,
     pub mood: String,
     pub timestamp: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ui: Option<ThemeUiOverrides>,
 }
 
 impl Default for Theme {
@@ -328,6 +337,96 @@ impl Default for Theme {
             tag: "Yellow".to_string(),
             mood: "Magenta".to_string(),
             timestamp: "Blue".to_string(),
+            ui: None,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(default)]
+pub struct ThemeUiOverrides {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fg: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bg: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub muted: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub accent: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selection_bg: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursorline_bg: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub toast: Option<ThemeToastOverrides>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(default)]
+pub struct ThemeToastOverrides {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub info: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub success: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ThemePreset {
+    Dark,
+    Dim,
+    Light,
+}
+
+impl ThemePreset {
+    pub fn default() -> Self {
+        ThemePreset::Dark
+    }
+}
+
+impl Theme {
+    pub fn preset(preset: ThemePreset) -> Self {
+        match preset {
+            ThemePreset::Dark => Theme {
+                border_default: "Reset".to_string(),
+                border_editing: "Green".to_string(),
+                border_search: "Cyan".to_string(),
+                border_todo_header: "Yellow".to_string(),
+                text_highlight: "50,50,50".to_string(),
+                todo_done: "Green".to_string(),
+                todo_wip: "Red".to_string(),
+                tag: "Yellow".to_string(),
+                mood: "Magenta".to_string(),
+                timestamp: "Blue".to_string(),
+                ui: None,
+            },
+            ThemePreset::Dim => Theme {
+                border_default: "DarkGray".to_string(),
+                border_editing: "LightBlue".to_string(),
+                border_search: "LightCyan".to_string(),
+                border_todo_header: "LightYellow".to_string(),
+                text_highlight: "30,30,30".to_string(),
+                todo_done: "LightGreen".to_string(),
+                todo_wip: "LightRed".to_string(),
+                tag: "LightCyan".to_string(),
+                mood: "LightMagenta".to_string(),
+                timestamp: "LightCyan".to_string(),
+                ui: None,
+            },
+            ThemePreset::Light => Theme {
+                border_default: "DarkGray".to_string(),
+                border_editing: "Blue".to_string(),
+                border_search: "Cyan".to_string(),
+                border_todo_header: "Blue".to_string(),
+                text_highlight: "200,200,200".to_string(),
+                todo_done: "Green".to_string(),
+                todo_wip: "Red".to_string(),
+                tag: "Blue".to_string(),
+                mood: "Magenta".to_string(),
+                timestamp: "DarkGray".to_string(),
+                ui: None,
+            },
         }
     }
 }
@@ -359,15 +458,23 @@ impl Config {
         let config_path = config_path();
 
         let mut config = if let Ok(content) = fs::read_to_string(&config_path) {
+            let has_theme = theme_table_present(&content);
             match toml::from_str::<Config>(&content) {
-                Ok(config) => config,
+                Ok(mut config) => {
+                    if !has_theme {
+                        config.theme = Theme::preset(ThemePreset::default());
+                    }
+                    config
+                }
                 Err(e) => {
                     eprintln!("Failed to parse config.toml ({config_path:?}), using defaults: {e}");
                     Config::default()
                 }
             }
         } else {
-            Config::default()
+            let mut config = Config::default();
+            config.theme = Theme::preset(ThemePreset::default());
+            config
         };
 
         let mut changed = config.normalize_paths();
@@ -427,5 +534,17 @@ impl Config {
         }
 
         changed
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Theme, ThemePreset};
+
+    #[test]
+    fn presets_construct_without_panicking() {
+        let _dark = Theme::preset(ThemePreset::Dark);
+        let _dim = Theme::preset(ThemePreset::Dim);
+        let _light = Theme::preset(ThemePreset::Light);
     }
 }
