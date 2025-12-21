@@ -373,6 +373,8 @@ fn handle_tag_popup(app: &mut App, key: event::KeyEvent) {
                     app.logs = results;
                     app.is_search_result = true;
                     app.last_search_query = Some(query);
+                    app.search_highlight_query = app.last_search_query.clone();
+                    app.search_highlight_ready_at = Some(Local::now() + Duration::milliseconds(150));
                     app.logs_state.select(Some(0));
                 }
             }
@@ -528,9 +530,13 @@ fn handle_normal_mode(app: &mut App, key: event::KeyEvent) {
 fn handle_search_mode(app: &mut App, key: event::KeyEvent) {
     if key_match(&key, &app.config.keybindings.search.cancel) {
         app.last_search_query = None;
+        app.search_highlight_query = None;
+        app.search_highlight_ready_at = None;
         app.transition_to(InputMode::Navigate);
     } else if key_match(&key, &app.config.keybindings.search.clear) {
         app.textarea = tui_textarea::TextArea::default();
+        app.search_highlight_query = None;
+        app.search_highlight_ready_at = None;
         app.transition_to(InputMode::Search);
     } else if key_match(&key, &app.config.keybindings.search.submit) {
         let query = app
@@ -542,6 +548,8 @@ fn handle_search_mode(app: &mut App, key: event::KeyEvent) {
             .join(" ");
         if !query.trim().is_empty() {
             app.last_search_query = Some(query.clone());
+            app.search_highlight_query = Some(query.clone());
+            app.search_highlight_ready_at = Some(Local::now() + Duration::milliseconds(150));
             if let Ok(results) = storage::search_entries(&app.config.data.log_path, &query) {
                 app.logs = results;
                 app.is_search_result = true;
@@ -660,6 +668,8 @@ fn refresh_search_results(app: &mut App, query: &str) {
         app.logs = results;
         app.is_search_result = true;
         app.logs_state.select(Some(0));
+        app.search_highlight_query = Some(query.to_string());
+        app.search_highlight_ready_at = Some(Local::now() + Duration::milliseconds(150));
     }
 }
 

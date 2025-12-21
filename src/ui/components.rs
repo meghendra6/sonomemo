@@ -44,7 +44,13 @@ pub fn centered_column(area: Rect, desired_width: u16) -> Rect {
     }
 }
 
-pub fn parse_markdown_spans(text: &str, theme: &Theme, in_code_block: bool) -> Vec<Span<'static>> {
+pub fn parse_markdown_spans(
+    text: &str,
+    theme: &Theme,
+    in_code_block: bool,
+    search_regex: Option<&regex::Regex>,
+    search_style: Style,
+) -> Vec<Span<'static>> {
     let mut spans: Vec<Span<'static>> = Vec::new();
 
     let leading_len = text.len().saturating_sub(text.trim_start().len());
@@ -161,7 +167,13 @@ pub fn parse_markdown_spans(text: &str, theme: &Theme, in_code_block: bool) -> V
                     .add_modifier(Modifier::BOLD),
             ));
         } else {
-            spans.extend(parse_words(segment, theme, todo_prefix));
+            spans.extend(parse_words(
+                segment,
+                theme,
+                todo_prefix,
+                search_regex,
+                search_style,
+            ));
         }
         is_code = !is_code;
     }
@@ -213,7 +225,13 @@ fn heading_text(line: &str) -> Option<&str> {
     }
 }
 
-fn parse_words(text: &str, theme: &Theme, todo_prefix: bool) -> Vec<Span<'static>> {
+fn parse_words(
+    text: &str,
+    theme: &Theme,
+    todo_prefix: bool,
+    search_regex: Option<&regex::Regex>,
+    search_style: Style,
+) -> Vec<Span<'static>> {
     let mut spans: Vec<Span<'static>> = Vec::new();
 
     // URL parsing
@@ -292,16 +310,54 @@ fn parse_words(text: &str, theme: &Theme, todo_prefix: bool) -> Vec<Span<'static
             continue;
         }
 
-        if todo_prefix {
-            spans.push(Span::styled(
-                word.to_string(),
-                Style::default().fg(Color::Reset),
+        let base_style = if todo_prefix {
+            Style::default().fg(Color::Reset)
+        } else {
+            Style::default()
+        };
+
+        if let Some(regex) = search_regex {
+            spans.extend(highlight_matches(
+                word,
+                base_style,
+                search_style,
+                regex,
             ));
         } else {
-            spans.push(Span::raw(word.to_string()));
+            spans.push(Span::styled(word.to_string(), base_style));
         }
     }
 
+    spans
+}
+
+fn highlight_matches(
+    text: &str,
+    base_style: Style,
+    search_style: Style,
+    regex: &regex::Regex,
+) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    let mut last = 0;
+    for mat in regex.find_iter(text) {
+        if mat.start() > last {
+            spans.push(Span::styled(
+                text[last..mat.start()].to_string(),
+                base_style,
+            ));
+        }
+        spans.push(Span::styled(
+            text[mat.start()..mat.end()].to_string(),
+            base_style.patch(search_style),
+        ));
+        last = mat.end();
+    }
+    if last < text.len() {
+        spans.push(Span::styled(text[last..].to_string(), base_style));
+    }
+    if spans.is_empty() {
+        spans.push(Span::styled(text.to_string(), base_style));
+    }
     spans
 }
 

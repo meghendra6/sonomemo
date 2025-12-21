@@ -10,6 +10,7 @@ use ratatui::{
 use crate::app::App;
 use crate::models::{InputMode, NavigateFocus, is_timestamped_line};
 use ratatui::style::Stylize;
+use regex::Regex;
 use std::path::Path;
 use unicode_width::UnicodeWidthStr;
 
@@ -80,10 +81,38 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         let blank_timestamp = " ".repeat(timestamp_width);
         let timestamp_color = tokens.content_timestamp;
 
+        let highlight_ready = if let Some(ready_at) = app.search_highlight_ready_at {
+            if Local::now() >= ready_at {
+                app.search_highlight_ready_at = None;
+                true
+            } else {
+                false
+            }
+        } else {
+            true
+        };
+
+        let mut search_regex: Option<Regex> = None;
+        if app.is_search_result && highlight_ready {
+            if let Some(query) = app.search_highlight_query.as_deref() {
+                let query = query.trim();
+                if !query.is_empty() {
+                    search_regex = Regex::new(&format!("(?i){}", regex::escape(query))).ok();
+                }
+            }
+        }
+
+        let search_style = Style::default()
+            .bg(tokens.ui_highlight)
+            .add_modifier(Modifier::BOLD);
+        let visible_start = app.timeline_ui_state.offset();
+        let visible_end = visible_start.saturating_add(timeline_body_area.height as usize);
+
     // Track current date for separator rendering and maintain index mapping
     let mut last_date: Option<String> = None;
     let mut items_with_separators: Vec<ListItem> = Vec::new();
     let mut ui_to_log_index: Vec<Option<usize>> = Vec::new(); // Maps UI index to actual log index
+    let mut ui_index: usize = 0;
 
     for (log_idx, entry) in app.logs.iter().enumerate() {
         let entry_date = file_date(&entry.file_path);
@@ -107,6 +136,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                     items_with_separators.push(ListItem::new(separator_line));
                     ui_to_log_index.push(None); // Separator has no corresponding log entry
                     last_date = Some(current_date.clone());
+                    ui_index += 1;
                 }
             }
         }
@@ -134,6 +164,12 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                 .saturating_sub(timestamp_width)
         } else {
             list_area_width.saturating_sub(date_width)
+        };
+
+        let highlight_here = if ui_index >= visible_start && ui_index < visible_end {
+            search_regex.as_ref()
+        } else {
+            None
         };
 
         for (line_idx, raw_line) in entry.content.lines().enumerate() {
@@ -179,6 +215,8 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                     wline,
                     &app.config.theme,
                     line_in_code_block,
+                    highlight_here,
+                    search_style,
                 ));
                 lines.push(Line::from(spans));
             }
@@ -189,6 +227,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         }
         items_with_separators.push(ListItem::new(Text::from(lines)));
         ui_to_log_index.push(Some(log_idx)); // This UI item corresponds to log_idx
+        ui_index += 1;
     }
 
     let list_items = items_with_separators;
@@ -300,6 +339,11 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         if let Some(query) = app.last_search_query.as_deref() {
             if !query.trim().is_empty() {
                 parts.push(format!("\"{}\"", query.trim()));
+            }
+        }
+        if let Some(selected) = app.logs_state.selected() {
+            if !app.logs.is_empty() {
+                parts.push(format!("Sel {}/{}", selected + 1, app.logs.len()));
             }
         }
         parts.push(stats_summary.clone());
@@ -430,7 +474,15 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             let wrapped = wrap_markdown_line(&line, todo_area_width);
             let lines: Vec<Line<'static>> = wrapped
                 .iter()
-                .map(|l| Line::from(parse_markdown_spans(l, &app.config.theme, false)))
+                .map(|l| {
+                    Line::from(parse_markdown_spans(
+                        l,
+                        &app.config.theme,
+                        false,
+                        None,
+                        Style::default(),
+                    ))
+                })
                 .collect();
             ListItem::new(Text::from(lines))
         })
@@ -498,19 +550,47 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         }
         InputMode::Search => {
             if let Some(search_area) = search_area {
+                let search_chunks = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([Constraint::Length(1), Constraint::Min(1)])
+                    .split(search_area);
+
+                let results_hint = if app.is_search_result {
+                    format!("Results {}", app.logs.len())
+                } else {
+                    "Results —".to_string()
+                };
+
+                let header = Paragraph::new(Line::from(vec![
+                    Span::styled(
+                        "Search",
+                        Style::default()
+                            .fg(tokens.ui_accent)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw("  "),
+                    Span::styled(results_hint, Style::default().fg(tokens.ui_muted)),
+                    Span::raw("  "),
+                    Span::styled(
+                        "Enter: apply · Esc: cancel · Ctrl+L: clear",
+                        Style::default().fg(tokens.ui_muted),
+                    ),
+                ]))
+                .style(Style::default().fg(tokens.ui_fg));
+                f.render_widget(header, search_chunks[0]);
+
                 let input_block = Block::default()
                     .borders(Borders::ALL)
-                    .title(" Search ")
                     .border_type(BorderType::Plain)
                     .border_style(Style::default().fg(tokens.ui_border_search));
-                let input_inner = input_block.inner(search_area);
+                let input_inner = input_block.inner(search_chunks[1]);
                 app.textarea.set_block(input_block);
                 app.textarea
                     .set_cursor_line_style(Style::default().bg(tokens.ui_cursorline_bg));
                 app.textarea
                     .set_selection_style(Style::default().bg(tokens.ui_selection_bg));
                 app.textarea.set_cursor_style(Style::default().reversed());
-                f.render_widget(&app.textarea, search_area);
+                f.render_widget(&app.textarea, search_chunks[1]);
                 cursor_area = Some(input_inner);
             }
         }

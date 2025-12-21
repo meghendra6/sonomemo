@@ -1,6 +1,7 @@
 use super::components::centered_rect;
 use crate::app::App;
 use crate::models::Mood;
+use crate::ui::color_parser::parse_color;
 use chrono::Local;
 use ratatui::{
     Frame,
@@ -180,17 +181,27 @@ pub fn render_todo_popup(f: &mut Frame, app: &mut App) {
 }
 
 pub fn render_tag_popup(f: &mut Frame, app: &mut App) {
-    let block = Block::default()
-        .title(" Select a tag (Enter: filter, Esc: close) ")
-        .borders(Borders::ALL);
+    let selection = app
+        .tag_list_state
+        .selected()
+        .map(|i| format!("{}/{}", i + 1, app.tags.len()))
+        .unwrap_or_else(|| "0/0".to_string());
+    let title = format!(" Tags {selection} · Enter: filter · Esc: close ");
+    let block = Block::default().title(title).borders(Borders::ALL);
     let area = centered_rect(50, 60, f.area());
     f.render_widget(Clear, area);
     f.render_widget(block, area);
 
+    let tag_color = parse_color(&app.config.theme.tag);
     let items: Vec<ListItem> = app
         .tags
         .iter()
-        .map(|(tag, count)| ListItem::new(format!("{} ({})", tag, count)))
+        .map(|(tag, count)| {
+            ListItem::new(Line::from(vec![
+                Span::styled(tag.clone(), Style::default().fg(tag_color).add_modifier(Modifier::BOLD)),
+                Span::raw(format!(" ({})", count)),
+            ]))
+        })
         .collect();
 
     let popup_layout = Layout::default()
@@ -199,9 +210,12 @@ pub fn render_tag_popup(f: &mut Frame, app: &mut App) {
         .margin(1)
         .split(area);
 
-    let list = List::new(items)
-        .highlight_symbol(">> ")
-        .highlight_style(Style::default().fg(Color::Cyan));
+    let highlight_bg = parse_color(&app.config.theme.text_highlight);
+    let list = List::new(items).highlight_symbol("").highlight_style(
+        Style::default()
+            .bg(highlight_bg)
+            .add_modifier(Modifier::BOLD),
+    );
 
     f.render_stateful_widget(list, popup_layout[0], &mut app.tag_list_state);
 }

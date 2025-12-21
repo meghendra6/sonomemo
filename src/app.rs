@@ -79,6 +79,8 @@ pub struct App<'a> {
 
     pub toast_message: Option<String>,
     pub toast_expiry: Option<DateTime<Local>>,
+    pub search_highlight_query: Option<String>,
+    pub search_highlight_ready_at: Option<DateTime<Local>>,
 
     // History loading state for infinite scroll
     pub loaded_start_date: Option<NaiveDate>,
@@ -197,6 +199,8 @@ impl<'a> App<'a> {
             pomodoro_alert_message: None,
             toast_message: None,
             toast_expiry: None,
+            search_highlight_query: None,
+            search_highlight_ready_at: None,
             loaded_start_date: Some(effective_start),
             earliest_available_date,
             is_loading_more: false,
@@ -241,6 +245,8 @@ impl<'a> App<'a> {
             {
                 self.logs = logs;
                 self.is_search_result = false;
+                self.search_highlight_query = None;
+                self.search_highlight_ready_at = None;
                 if !self.logs.is_empty() {
                     // Try to preserve the previous selection position
                     let new_selection = preserve_selection
@@ -260,6 +266,8 @@ impl<'a> App<'a> {
             if let Ok(logs) = storage::read_today_entries(&self.config.data.log_path) {
                 self.logs = logs;
                 self.is_search_result = false;
+                self.search_highlight_query = None;
+                self.search_highlight_ready_at = None;
                 if !self.logs.is_empty() {
                     self.logs_state.select(Some(self.logs.len() - 1));
                 }
