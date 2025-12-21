@@ -33,11 +33,29 @@ pub fn append_entry(log_path: &Path, content: &str) -> io::Result<()> {
     let path = get_today_file_path(log_path);
 
     let time = Local::now().format("%H:%M:%S").to_string();
-    let line = format!("[{}] {}\n", time, content);
+    let entry_body = content.trim_end_matches('\n');
+    let mut entry = format!("[{}] {}", time, entry_body);
 
-    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
+    if !entry.ends_with('\n') {
+        entry.push('\n');
+    }
+    if !entry.ends_with("\n\n") {
+        entry.push('\n');
+    }
 
-    file.write_all(line.as_bytes())?;
+    let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
+    if path.exists() && path.metadata()?.len() > 0 {
+        let existing = fs::read_to_string(&path).unwrap_or_default();
+        if !existing.ends_with("\n\n") {
+            if existing.ends_with('\n') {
+                file.write_all(b"\n")?;
+            } else {
+                file.write_all(b"\n\n")?;
+            }
+        }
+    }
+
+    file.write_all(entry.as_bytes())?;
     Ok(())
 }
 
@@ -246,18 +264,25 @@ pub fn search_entries(log_path: &Path, query: &str) -> io::Result<Vec<LogEntry>>
 
 fn parse_log_content(content: &str, path_str: &str) -> Vec<LogEntry> {
     let mut entries: Vec<LogEntry> = Vec::new();
+    let lines: Vec<&str> = content.lines().collect();
 
-    for (i, line) in content.lines().enumerate() {
+    for (i, line) in lines.iter().enumerate() {
         if line.contains("System: Carryover Checked") {
             continue;
         }
 
-        if is_timestamped_line(line) || entries.is_empty() {
-            if let Some(last) = entries.last_mut() {
-                last.end_line = i.saturating_sub(1);
+        if line.trim().is_empty() {
+            if entries.is_empty() {
+                continue;
             }
+            if next_non_empty_is_timestamp(&lines, i + 1) {
+                continue;
+            }
+        }
+
+        if is_timestamped_line(line) || entries.is_empty() {
             entries.push(LogEntry {
-                content: line.to_string(),
+                content: (*line).to_string(),
                 file_path: path_str.to_string(),
                 line_number: i,
                 end_line: i,
@@ -272,6 +297,19 @@ fn parse_log_content(content: &str, path_str: &str) -> Vec<LogEntry> {
         }
     }
     entries
+}
+
+fn next_non_empty_is_timestamp(lines: &[&str], start: usize) -> bool {
+    for line in lines.iter().skip(start) {
+        if line.contains("System: Carryover Checked") {
+            continue;
+        }
+        if line.trim().is_empty() {
+            continue;
+        }
+        return is_timestamped_line(line);
+    }
+    false
 }
 
 fn parse_task_content(content: &str, path_str: &str) -> Vec<TaskItem> {
@@ -620,4 +658,70 @@ fn save_state(log_path: &Path, state: &AppState) -> io::Result<()> {
     let path = state_file_path(log_path);
     let content = toml::to_string(state).unwrap_or_default();
     fs::write(path, content)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use regex::Regex;
+    use std::fs;
+    use std::path::PathBuf;
+
+    fn temp_log_dir() -> PathBuf {
+        let mut dir = std::env::temp_dir();
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        dir.push(format!("memolog-test-{}-{}", std::process::id(), stamp));
+        fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
+    #[test]
+    fn append_entry_inserts_blank_line_between_entries() {
+        let dir = temp_log_dir();
+        append_entry(&dir, "First\n- item").expect("append first");
+        append_entry(&dir, "Second").expect("append second");
+
+        let path = get_today_file_path(&dir);
+        let content = fs::read_to_string(path).expect("read log");
+
+        let first_line = content.lines().next().unwrap_or("");
+        let ts_re = Regex::new(r"^\[\d{2}:\d{2}:\d{2}\] ").unwrap();
+        assert!(ts_re.is_match(first_line));
+        assert!(!first_line.starts_with("## "));
+
+        let lines: Vec<&str> = content.split('\n').collect();
+        let mut timestamps = Vec::new();
+        for (idx, line) in lines.iter().enumerate() {
+            if is_timestamped_line(line) {
+                timestamps.push(idx);
+            }
+        }
+        assert!(timestamps.len() >= 2);
+        let second = timestamps[1];
+        assert_eq!(lines.get(second.saturating_sub(1)).copied().unwrap_or(""), "");
+    }
+
+    #[test]
+    fn parse_log_content_skips_separator_blank_lines() {
+        let content = "[09:00:00] First\n- item\n\n[09:10:00] Second";
+        let entries = parse_log_content(content, "test.md");
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].content, "[09:00:00] First\n- item");
+        assert_eq!(entries[0].line_number, 0);
+        assert_eq!(entries[0].end_line, 1);
+        assert_eq!(entries[1].line_number, 3);
+    }
+
+    #[test]
+    fn parse_log_content_keeps_internal_blank_lines() {
+        let content = "[09:00:00] First\n\n- item\n\n[09:10:00] Second";
+        let entries = parse_log_content(content, "test.md");
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].content, "[09:00:00] First\n\n- item");
+        assert_eq!(entries[0].end_line, 2);
+        assert_eq!(entries[1].line_number, 4);
+    }
 }
