@@ -216,6 +216,7 @@ pub struct TimelineBindings {
     pub toggle_todo: Vec<String>,
     pub open: Vec<String>,
     pub edit: Vec<String>,
+    pub delete_entry: Vec<String>,
 }
 
 impl Default for TimelineBindings {
@@ -230,6 +231,7 @@ impl Default for TimelineBindings {
             toggle_todo: vec!["enter".to_string(), "space".to_string()],
             open: vec!["enter".to_string()],
             edit: vec!["e".to_string()],
+            delete_entry: vec!["x".to_string()],
         }
     }
 }

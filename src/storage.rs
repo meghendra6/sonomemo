@@ -387,6 +387,10 @@ pub fn replace_entry_lines(
     fs::write(file_path, new_content)
 }
 
+pub fn delete_entry_lines(file_path: &str, start_line: usize, end_line: usize) -> io::Result<()> {
+    replace_entry_lines(file_path, start_line, end_line, &[])
+}
+
 pub fn read_lines_range(
     file_path: &str,
     start_line: usize,

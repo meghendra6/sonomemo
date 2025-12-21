@@ -22,8 +22,8 @@ pub mod theme;
 use components::{centered_column, parse_markdown_spans, wrap_markdown_line};
 use popups::{
     render_activity_popup, render_help_popup, render_mood_popup, render_path_popup,
-    render_discard_popup, render_pomodoro_popup, render_siren_popup, render_tag_popup,
-    render_todo_popup,
+    render_delete_entry_popup, render_discard_popup, render_pomodoro_popup,
+    render_siren_popup, render_tag_popup, render_todo_popup,
 };
 
 pub fn ui(f: &mut Frame, app: &mut App) {
@@ -639,6 +639,9 @@ pub fn ui(f: &mut Frame, app: &mut App) {
 
     if app.show_help_popup {
         render_help_popup(f, app);
+    }
+    if app.show_delete_entry_popup {
+        render_delete_entry_popup(f);
     }
     if app.show_discard_popup {
         render_discard_popup(f, app);

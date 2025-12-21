@@ -393,6 +393,32 @@ pub fn render_discard_popup(f: &mut Frame, _app: &App) {
     f.render_widget(help_text, text_area[1]);
 }
 
+pub fn render_delete_entry_popup(f: &mut Frame) {
+    let block = Block::default()
+        .title(" Delete this entry? ")
+        .borders(Borders::ALL)
+        .style(Style::default().fg(Color::LightRed));
+    let area = centered_rect(50, 20, f.area());
+    f.render_widget(Clear, area);
+    f.render_widget(block, area);
+
+    let text_area = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
+        .margin(2)
+        .split(area);
+
+    let body = Paragraph::new("Delete this entry? (y)es / (n)o")
+        .style(Style::default().add_modifier(Modifier::BOLD))
+        .wrap(ratatui::widgets::Wrap { trim: true });
+
+    let help_text = Paragraph::new("Enter/y: delete  Esc/n: cancel")
+        .style(Style::default().fg(Color::DarkGray));
+
+    f.render_widget(body, text_area[0]);
+    f.render_widget(help_text, text_area[1]);
+}
+
 pub fn render_pomodoro_popup(f: &mut Frame, app: &App) {
     let block = Block::default()
         .title(" Pomodoro (Task) ")

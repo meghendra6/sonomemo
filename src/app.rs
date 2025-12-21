@@ -60,6 +60,8 @@ pub struct App<'a> {
     pub is_search_result: bool,
     pub should_quit: bool,
     pub show_discard_popup: bool,
+    pub show_delete_entry_popup: bool,
+    pub delete_entry_target: Option<LogEntry>,
 
     // Pomodoro timer state
     pub pomodoro_start: Option<DateTime<Local>>,
@@ -186,6 +188,8 @@ impl<'a> App<'a> {
             is_search_result: false,
             should_quit: false,
             show_discard_popup: false,
+            show_delete_entry_popup: false,
+            delete_entry_target: None,
             pomodoro_start: None,
             pomodoro_end: None,
             pomodoro_target: None,

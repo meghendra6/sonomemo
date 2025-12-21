@@ -221,6 +221,10 @@ fn handle_popup_events(app: &mut App, key: event::KeyEvent) -> bool {
         handle_discard_popup(app, key);
         return true;
     }
+    if app.show_delete_entry_popup {
+        handle_delete_entry_popup(app, key);
+        return true;
+    }
 
     if app.show_pomodoro_popup {
         handle_pomodoro_popup(app, key);
@@ -259,6 +263,27 @@ fn handle_discard_popup(app: &mut App, key: event::KeyEvent) {
         app.show_discard_popup = false;
     } else if key_match(&key, &app.config.keybindings.popup.cancel) || key.code == KeyCode::Esc {
         app.show_discard_popup = false;
+    }
+}
+
+fn handle_delete_entry_popup(app: &mut App, key: event::KeyEvent) {
+    if key_match(&key, &app.config.keybindings.popup.confirm) {
+        if let Some(entry) = app.delete_entry_target.take() {
+            if storage::delete_entry_lines(&entry.file_path, entry.line_number, entry.end_line)
+                .is_ok()
+            {
+                app.update_logs();
+                app.toast("Entry deleted.");
+            } else {
+                app.toast("Failed to delete entry.");
+            }
+        } else {
+            app.toast("No entry selected.");
+        }
+        app.show_delete_entry_popup = false;
+    } else if key_match(&key, &app.config.keybindings.popup.cancel) || key.code == KeyCode::Esc {
+        app.show_delete_entry_popup = false;
+        app.delete_entry_target = None;
     }
 }
 
@@ -454,6 +479,19 @@ fn handle_normal_mode(app: &mut App, key: event::KeyEvent) {
                 let entry = app.logs[i].clone();
                 app.start_edit_entry(&entry);
             }
+        }
+    } else if key_match(&key, &app.config.keybindings.timeline.delete_entry) {
+        if app.navigate_focus == models::NavigateFocus::Timeline {
+            if let Some(i) = app.logs_state.selected() {
+                if i < app.logs.len() {
+                    app.delete_entry_target = Some(app.logs[i].clone());
+                    app.show_delete_entry_popup = true;
+                }
+            } else {
+                app.toast("No entry selected.");
+            }
+        } else {
+            app.toast("Delete in Timeline.");
         }
     } else if app.navigate_focus == models::NavigateFocus::Tasks
         && key_match(&key, &app.config.keybindings.tasks.up)
