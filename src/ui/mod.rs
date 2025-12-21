@@ -16,6 +16,7 @@ use std::path::Path;
 pub mod color_parser;
 pub mod components;
 pub mod popups;
+pub mod theme;
 
 use components::{parse_markdown_spans, wrap_markdown_line};
 use popups::{
