@@ -28,6 +28,22 @@ pub fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
         .split(popup_layout[1])[1]
 }
 
+pub fn centered_column(area: Rect, desired_width: u16) -> Rect {
+    if area.width == 0 || area.height == 0 {
+        return area;
+    }
+
+    let width = desired_width.max(1).min(area.width);
+    let x = area.x + area.width.saturating_sub(width) / 2;
+
+    Rect {
+        x,
+        y: area.y,
+        width,
+        height: area.height,
+    }
+}
+
 pub fn parse_markdown_spans(text: &str, theme: &Theme, in_code_block: bool) -> Vec<Span<'static>> {
     let mut spans: Vec<Span<'static>> = Vec::new();
 

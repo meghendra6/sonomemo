@@ -36,6 +36,7 @@ pub struct App<'a> {
     pub textarea: TextArea<'a>,
     pub textarea_viewport_row: u16,
     pub textarea_viewport_col: u16,
+    pub composer_dirty: bool,
     pub active_date: String,
     pub logs: Vec<LogEntry>,
     pub logs_state: ListState,
@@ -160,6 +161,7 @@ impl<'a> App<'a> {
             textarea,
             textarea_viewport_row: 0,
             textarea_viewport_col: 0,
+            composer_dirty: false,
             active_date,
             logs,
             logs_state,
@@ -223,6 +225,7 @@ impl<'a> App<'a> {
             from_search: self.is_search_result,
             search_query: self.last_search_query.clone(),
         });
+        self.composer_dirty = false;
         self.transition_to(InputMode::Editing);
     }
 
@@ -484,12 +487,14 @@ impl<'a> App<'a> {
                 if self.navigate_focus != NavigateFocus::Tasks {
                     self.navigate_focus = NavigateFocus::Timeline;
                 }
+                self.composer_dirty = false;
             }
             InputMode::Editing => {
                 self.textarea.set_placeholder_text(PLACEHOLDER_COMPOSE);
                 self.navigate_focus = NavigateFocus::Timeline;
                 self.textarea_viewport_row = 0;
                 self.textarea_viewport_col = 0;
+                self.composer_dirty = false;
                 // Return to full log view when entering Compose from search results (unless editing an entry)
                 if self.is_search_result && self.editing_entry.is_none() {
                     self.update_logs();
@@ -503,6 +508,7 @@ impl<'a> App<'a> {
                 self.textarea.set_placeholder_text(PLACEHOLDER_SEARCH);
                 self.textarea_viewport_row = 0;
                 self.textarea_viewport_col = 0;
+                self.composer_dirty = false;
             }
         }
         self.input_mode = mode;
