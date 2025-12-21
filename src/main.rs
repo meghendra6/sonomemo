@@ -569,11 +569,17 @@ fn handle_editing_mode(app: &mut App, key: event::KeyEvent) {
     } else if key_match(&key, &app.config.keybindings.composer.indent) {
         if !indent_or_outdent_list_line(&mut app.textarea, true) {
             let _ = app.textarea.insert_tab();
+            app.composer_dirty = true;
+        } else {
+            app.composer_dirty = true;
         }
     } else if key_match(&key, &app.config.keybindings.composer.outdent) {
-        let _ = indent_or_outdent_list_line(&mut app.textarea, false);
+        if indent_or_outdent_list_line(&mut app.textarea, false) {
+            app.composer_dirty = true;
+        }
     } else if key_match(&key, &app.config.keybindings.composer.newline) {
         insert_newline_with_auto_indent(&mut app.textarea);
+        app.composer_dirty = true;
     } else if key_match(&key, &app.config.keybindings.composer.submit) {
         let lines = app.textarea.lines().to_vec();
         let is_empty = lines.iter().all(|l| l.trim().is_empty());
@@ -630,9 +636,12 @@ fn handle_editing_mode(app: &mut App, key: event::KeyEvent) {
 
         // Reset textarea
         app.textarea = tui_textarea::TextArea::default();
+        app.composer_dirty = false;
         app.transition_to(InputMode::Navigate);
     } else {
-        app.textarea.input(key);
+        if app.textarea.input(key) {
+            app.composer_dirty = true;
+        }
     }
 }
 

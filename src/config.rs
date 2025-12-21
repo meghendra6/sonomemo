@@ -126,6 +126,7 @@ pub fn config_path() -> PathBuf {
 pub struct Config {
     pub keybindings: KeyBindings,
     pub theme: Theme,
+    pub editor: EditorConfig,
     pub data: DataConfig,
     pub pomodoro: PomodoroConfig,
 }
@@ -141,6 +142,18 @@ impl Default for DataConfig {
         Self {
             log_path: default_log_dir(),
         }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(default)]
+pub struct EditorConfig {
+    pub column_width: u16,
+}
+
+impl Default for EditorConfig {
+    fn default() -> Self {
+        Self { column_width: 88 }
     }
 }
 

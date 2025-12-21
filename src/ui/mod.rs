@@ -1,7 +1,7 @@
 use chrono::Local;
 use ratatui::{
     Frame,
-    layout::{Constraint, Direction, Layout},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, BorderType, Borders, List, ListItem, Paragraph},
@@ -12,51 +12,60 @@ use crate::models::{InputMode, NavigateFocus, is_timestamped_line};
 use crate::ui::color_parser::parse_color;
 use ratatui::style::Stylize;
 use std::path::Path;
+use unicode_width::UnicodeWidthStr;
 
 pub mod color_parser;
 pub mod components;
 pub mod popups;
 pub mod theme;
 
-use components::{parse_markdown_spans, wrap_markdown_line};
+use components::{centered_column, parse_markdown_spans, wrap_markdown_line};
 use popups::{
     render_activity_popup, render_help_popup, render_mood_popup, render_path_popup,
     render_discard_popup, render_pomodoro_popup, render_siren_popup, render_tag_popup,
     render_todo_popup,
 };
 
-const HELP_NAVIGATE: &str = " ?: Help  h/l: Focus  j/k: Move  Space/Enter: Toggle Task  e: Edit  i: Compose  /: Search  t: Tags  p: Pomodoro  g: Activity  o: Log Dir  Ctrl+Q: Quit ";
-const HELP_COMPOSE: &str =
-    " Enter: New line  Shift+Enter: Save  Tab/Shift+Tab: Indent  Ctrl+L: Clear  Esc: Back ";
-const HELP_SEARCH: &str = " Enter: Apply  Ctrl+L: Clear  Esc: Cancel ";
-
 pub fn ui(f: &mut Frame, app: &mut App) {
-    let input_height = match app.input_mode {
-        InputMode::Editing => preferred_composer_height(f.area().height),
-        InputMode::Search => 5,
-        InputMode::Navigate => 3,
+    let tokens = theme::ThemeTokens::from_theme(&app.config.theme);
+    let (main_area, search_area, status_area) = match app.input_mode {
+        InputMode::Editing => {
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Min(1), Constraint::Length(1)])
+                .split(f.area());
+            (chunks[0], None, chunks[1])
+        }
+        InputMode::Search => {
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Min(1), Constraint::Length(5), Constraint::Length(1)])
+                .split(f.area());
+            (chunks[0], Some(chunks[1]), chunks[2])
+        }
+        InputMode::Navigate => {
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Min(1), Constraint::Length(1)])
+                .split(f.area());
+            (chunks[0], None, chunks[1])
+        }
     };
 
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(1),               // Main panels
-            Constraint::Length(input_height), // Composer / Search
-            Constraint::Length(1),            // Footer (Help)
-        ])
-        .split(f.area());
+    let mut cursor_area: Option<Rect> = None;
 
-    // Split top area: 70% logs, 30% tasks
-    let top_chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
-        .split(chunks[0]);
+    if app.input_mode != InputMode::Editing {
+        // Split top area: 70% logs, 30% tasks
+        let top_chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
+            .split(main_area);
 
-    // Timeline log view
-    let list_area_width = top_chunks[0].width.saturating_sub(4) as usize;
-    let timestamp_width: usize = 11; // "[HH:MM:SS] "
-    let blank_timestamp = " ".repeat(timestamp_width);
-    let timestamp_color = parse_color(&app.config.theme.timestamp);
+        // Timeline log view
+        let list_area_width = top_chunks[0].width.saturating_sub(4) as usize;
+        let timestamp_width: usize = 11; // "[HH:MM:SS] "
+        let blank_timestamp = " ".repeat(timestamp_width);
+        let timestamp_color = parse_color(&app.config.theme.timestamp);
 
     // Track current date for separator rendering and maintain index mapping
     let mut last_date: Option<String> = None;
@@ -449,93 +458,51 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         Style::default().bg(highlight_bg)
     };
 
-    let todo_list = List::new(todos)
-        .block(todo_block)
-        .highlight_symbol("▶ ")
-        .highlight_style(todo_highlight_style);
-    f.render_stateful_widget(todo_list, top_chunks[1], &mut app.tasks_state);
+        let todo_list = List::new(todos)
+            .block(todo_block)
+            .highlight_symbol("▶ ")
+            .highlight_style(todo_highlight_style);
+        f.render_stateful_widget(todo_list, top_chunks[1], &mut app.tasks_state);
+    }
 
-    // Bottom area: Status panel in Navigate mode, TextArea in Editing/Search
     match app.input_mode {
-        InputMode::Navigate => {
-            let border_color = parse_color(&app.config.theme.border_default);
-            let focus = match app.navigate_focus {
-                NavigateFocus::Timeline => "Timeline",
-                NavigateFocus::Tasks => "Tasks",
-            };
-
-            let selected = match app.navigate_focus {
-                NavigateFocus::Timeline => app
-                    .logs_state
-                    .selected()
-                    .and_then(|i| app.logs.get(i))
-                    .and_then(|e| e.content.lines().next())
-                    .unwrap_or(""),
-                NavigateFocus::Tasks => app
-                    .tasks_state
-                    .selected()
-                    .and_then(|i| app.tasks.get(i))
-                    .map(|t| t.text.as_str())
-                    .unwrap_or(""),
-            };
-
-            let status = vec![
-                Line::from(vec![
-                    Span::styled("Focus: ", Style::default().fg(Color::DarkGray)),
-                    Span::styled(focus, Style::default().add_modifier(Modifier::BOLD)),
-                    Span::raw("  "),
-                    Span::styled("Selected: ", Style::default().fg(Color::DarkGray)),
-                    Span::raw(truncate(selected, 80)),
-                ]),
-                Line::from(Span::raw(
-                    "Press ? for help. Press i to compose. Press / to search.",
-                )),
-            ];
-
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .title(" Status ")
-                .border_type(BorderType::Plain)
-                .border_style(Style::default().fg(border_color));
-            f.render_widget(
-                Paragraph::new(status)
-                    .block(block)
-                    .wrap(ratatui::widgets::Wrap { trim: true }),
-                chunks[1],
-            );
-        }
-        InputMode::Editing | InputMode::Search => {
-            let (input_title, border_color) = match app.input_mode {
-                crate::models::InputMode::Search => {
-                    (" Search ", parse_color(&app.config.theme.border_search))
-                }
-                crate::models::InputMode::Editing => {
-                    (" Composer ", parse_color(&app.config.theme.border_editing))
-                }
-                crate::models::InputMode::Navigate => unreachable!(),
-            };
-
-            let input_block = Block::default()
-                .borders(Borders::ALL)
-                .title(input_title)
-                .border_type(BorderType::Thick)
-                .border_style(Style::default().fg(border_color));
-
+        InputMode::Editing => {
+            let editor_width = app.config.editor.column_width;
+            let editor_area = centered_column(main_area, editor_width);
+            let input_block = Block::default().borders(Borders::NONE);
+            let input_inner = input_block.inner(editor_area);
             app.textarea.set_block(input_block);
             app.textarea
-                .set_cursor_line_style(Style::default().underline_color(Color::Reset));
+                .set_cursor_line_style(Style::default().bg(tokens.ui_cursorline_bg));
+            app.textarea
+                .set_selection_style(Style::default().bg(tokens.ui_selection_bg));
             app.textarea.set_cursor_style(Style::default().reversed());
-            f.render_widget(&app.textarea, chunks[1]);
+            f.render_widget(&app.textarea, editor_area);
+            cursor_area = Some(input_inner);
         }
+        InputMode::Search => {
+            if let Some(search_area) = search_area {
+                let input_block = Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Search ")
+                    .border_type(BorderType::Plain)
+                    .border_style(Style::default().fg(tokens.ui_border_search));
+                let input_inner = input_block.inner(search_area);
+                app.textarea.set_block(input_block);
+                app.textarea
+                    .set_cursor_line_style(Style::default().bg(tokens.ui_cursorline_bg));
+                app.textarea
+                    .set_selection_style(Style::default().bg(tokens.ui_selection_bg));
+                app.textarea.set_cursor_style(Style::default().reversed());
+                f.render_widget(&app.textarea, search_area);
+                cursor_area = Some(input_inner);
+            }
+        }
+        InputMode::Navigate => {}
     }
 
     // Manual cursor position setting (required for Korean/CJK IME support)
-    if app.input_mode == crate::models::InputMode::Editing
-        || app.input_mode == crate::models::InputMode::Search
-    {
-        let input_area = chunks[1];
-        let inner = Block::default().borders(Borders::ALL).inner(input_area);
-
+    if let Some(inner) = cursor_area {
         if inner.height > 0 && inner.width > 0 {
             let (cursor_row, cursor_col) = app.textarea.cursor();
             let cursor_row_u16 = (cursor_row.min(u16::MAX as usize)) as u16;
@@ -560,24 +527,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         }
     }
 
-    // Footer help text (toast message takes priority)
-    let help_text = if let Some(msg) = app.toast_message.as_deref() {
-        msg
-    } else {
-        match app.input_mode {
-            InputMode::Navigate => HELP_NAVIGATE,
-            InputMode::Editing => HELP_COMPOSE,
-            InputMode::Search => HELP_SEARCH,
-        }
-    };
-    let footer = Paragraph::new(Line::from(Span::styled(
-        help_text,
-        Style::default()
-            .fg(Color::DarkGray)
-            .add_modifier(Modifier::BOLD),
-    )))
-    .block(Block::default().borders(Borders::NONE));
-    f.render_widget(footer, chunks[2]);
+    render_status_bar(f, status_area, app, &tokens);
 
     // Render popups (order matters: later ones appear on top)
     if app.show_activity_popup {
@@ -628,12 +578,114 @@ fn truncate(text: &str, max_chars: usize) -> String {
     out
 }
 
-fn preferred_composer_height(total_height: u16) -> u16 {
-    let footer = 1;
-    let min_main = 6;
-    let max_input = total_height.saturating_sub(footer + min_main).max(3);
-    let desired = (total_height.saturating_mul(45) / 100).max(10);
-    desired.min(max_input)
+fn render_status_bar(f: &mut Frame, area: Rect, app: &App, tokens: &theme::ThemeTokens) {
+    if area.height == 0 || area.width == 0 {
+        return;
+    }
+
+    let mode_label = match app.input_mode {
+        InputMode::Navigate => match app.navigate_focus {
+            NavigateFocus::Timeline => "NAV:TL",
+            NavigateFocus::Tasks => "NAV:TS",
+        },
+        InputMode::Editing => "EDIT",
+        InputMode::Search => "SEARCH",
+    };
+
+    let file_label = status_file_label(app);
+    let dirty_mark = if app.input_mode == InputMode::Editing && app.composer_dirty {
+        "*"
+    } else {
+        ""
+    };
+
+    let left_spans = vec![
+        Span::styled(
+            format!(" {mode_label} "),
+            Style::default()
+                .fg(tokens.ui_accent)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" "),
+        Span::styled(
+            format!("{file_label}{dirty_mark}"),
+            Style::default()
+                .fg(tokens.ui_fg)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ];
+
+    let mut right_plain = String::new();
+    let mut right_spans = Vec::new();
+
+    if matches!(app.input_mode, InputMode::Editing | InputMode::Search) {
+        let (row, col) = app.textarea.cursor();
+        let cursor_text = format!("Ln {}, Col {}", row + 1, col + 1);
+        right_plain.push_str(&cursor_text);
+        right_spans.push(Span::styled(
+            cursor_text,
+            Style::default().fg(tokens.ui_muted),
+        ));
+    }
+
+    if let Some(toast) = app.toast_message.as_deref() {
+        if !toast.is_empty() {
+            if !right_plain.is_empty() {
+                right_plain.push_str("  ");
+                right_spans.push(Span::raw("  "));
+            }
+            right_plain.push_str(toast);
+            right_spans.push(Span::styled(
+                toast,
+                Style::default()
+                    .fg(tokens.ui_toast_info)
+                    .add_modifier(Modifier::BOLD),
+            ));
+        }
+    }
+
+    let min_left_width = 10u16;
+    let mut right_width = UnicodeWidthStr::width(right_plain.as_str()) as u16;
+    let max_right = area.width.saturating_sub(min_left_width);
+    right_width = right_width.min(max_right);
+
+    if right_plain.is_empty() || right_width == 0 {
+        let left = Paragraph::new(Line::from(left_spans))
+            .style(Style::default().fg(tokens.ui_fg).bg(tokens.ui_bg));
+        f.render_widget(left, area);
+        return;
+    }
+
+    let status_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Min(0), Constraint::Length(right_width)])
+        .split(area);
+
+    let left = Paragraph::new(Line::from(left_spans))
+        .style(Style::default().fg(tokens.ui_fg).bg(tokens.ui_bg));
+    f.render_widget(left, status_chunks[0]);
+
+    let right = Paragraph::new(Line::from(right_spans))
+        .style(Style::default().fg(tokens.ui_fg).bg(tokens.ui_bg))
+        .alignment(Alignment::Right);
+    f.render_widget(right, status_chunks[1]);
+}
+
+fn status_file_label(app: &App) -> String {
+    if let Some(editing) = app.editing_entry.as_ref() {
+        if let Some(name) = Path::new(&editing.file_path)
+            .file_name()
+            .and_then(|s| s.to_str())
+        {
+            return name.to_string();
+        }
+    }
+
+    if app.is_search_result || app.input_mode == InputMode::Search {
+        return "Search Results".to_string();
+    }
+
+    format!("{}.md", app.active_date)
 }
 
 fn next_scroll_top(prev_top: u16, cursor: u16, len: u16) -> u16 {
