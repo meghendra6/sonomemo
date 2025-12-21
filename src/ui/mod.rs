@@ -8,7 +8,10 @@ use ratatui::{
 };
 
 use crate::app::{App, PLACEHOLDER_COMPOSE};
-use crate::models::{InputMode, NavigateFocus, is_timestamped_line};
+use crate::models::{
+    InputMode, NavigateFocus, is_heading_timestamp_line, is_timestamped_line,
+    split_timestamp_line,
+};
 use ratatui::style::Stylize;
 use regex::Regex;
 use std::path::Path;
@@ -143,11 +146,17 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         let date_width: usize = if date_prefix.is_some() { 11 } else { 0 }; // "YYYY-MM-DD "
         let blank_date = " ".repeat(date_width);
 
-        let entry_has_timestamp = entry
-            .content
-            .lines()
-            .next()
-            .is_some_and(|l| is_timestamped_line(l));
+        let first_line = entry.content.lines().next();
+        let entry_has_timestamp = first_line.is_some_and(|l| is_timestamped_line(l));
+        let heading_timestamp_prefix = first_line
+            .and_then(|l| {
+                if is_heading_timestamp_line(l) {
+                    split_timestamp_line(l).map(|(prefix, _)| prefix)
+                } else {
+                    None
+                }
+            })
+            .map(|prefix| prefix.trim_end_matches(' '));
         let content_width = if entry_has_timestamp {
             list_area_width
                 .saturating_sub(date_width)
@@ -162,13 +171,25 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             None
         };
 
+        let first_body_index = if heading_timestamp_prefix.is_some() { 1 } else { 0 };
+
         for (line_idx, raw_line) in entry.content.lines().enumerate() {
-            let (ts_prefix, content_line) = if entry_has_timestamp && line_idx == 0 {
-                // Safe due to timestamp format: "[HH:MM:SS] "
-                (&raw_line[..timestamp_width], &raw_line[timestamp_width..])
-            } else {
-                ("", raw_line)
-            };
+            if heading_timestamp_prefix.is_some() && line_idx == 0 {
+                continue;
+            }
+
+            let (ts_prefix, content_line) =
+                if entry_has_timestamp && line_idx == first_body_index {
+                    if let Some(prefix) = heading_timestamp_prefix {
+                        (prefix, raw_line)
+                    } else if let Some((prefix, rest)) = split_timestamp_line(raw_line) {
+                        (prefix, rest)
+                    } else {
+                        ("", raw_line)
+                    }
+                } else {
+                    ("", raw_line)
+                };
 
             let is_fence = content_line.trim_start().starts_with("```");
             let line_in_code_block = in_code_block || is_fence;
@@ -178,7 +199,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                 let mut spans = Vec::new();
 
                 if date_width > 0 {
-                    let date_span = if line_idx == 0 && wrap_idx == 0 {
+                    let date_span = if line_idx == first_body_index && wrap_idx == 0 {
                         let date = date_prefix.clone().unwrap_or_default();
                         Span::styled(
                             format!("{date} "),
@@ -193,8 +214,12 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                 }
 
                 if entry_has_timestamp {
-                    let ts_span = if line_idx == 0 && wrap_idx == 0 {
-                        Span::styled(ts_prefix.to_string(), Style::default().fg(timestamp_color))
+                    let ts_span = if line_idx == first_body_index && wrap_idx == 0 {
+                        let mut ts_text = ts_prefix.to_string();
+                        if !ts_text.is_empty() && !ts_text.ends_with(' ') {
+                            ts_text.push(' ');
+                        }
+                        Span::styled(ts_text, Style::default().fg(timestamp_color))
                     } else {
                         Span::raw(blank_timestamp.clone())
                     };
@@ -244,13 +269,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                 .content
                 .lines()
                 .next()
-                .and_then(|line| {
-                    if is_timestamped_line(line) {
-                        Some(&line[1..9]) // Extract HH:MM:SS
-                    } else {
-                        None
-                    }
-                })
+                .and_then(|line| split_timestamp_line(line).map(|(prefix, _)| &prefix[1..9]))
                 .unwrap_or("--:--:--");
             format!("📅 {} {}", date, time_info)
         } else {

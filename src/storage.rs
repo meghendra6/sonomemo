@@ -1,5 +1,6 @@
 use crate::models::{
-    LogEntry, TaskItem, count_trailing_tomatoes, is_timestamped_line, strip_trailing_tomatoes,
+    LogEntry, TaskItem, count_trailing_tomatoes, is_timestamped_line, strip_timestamp_prefix,
+    strip_trailing_tomatoes,
 };
 use chrono::{Duration, Local, NaiveDate};
 use serde::{Deserialize, Serialize};
@@ -34,11 +35,16 @@ pub fn append_entry(log_path: &Path, content: &str) -> io::Result<()> {
 
     let time = Local::now().format("%H:%M:%S").to_string();
     let entry_body = content.trim_end_matches('\n');
-    let mut entry = format!("[{}] {}", time, entry_body);
-
-    if !entry.ends_with('\n') {
+    let mut entry = format!("## [{}]\n", time);
+    if !entry_body.is_empty() {
+        entry.push_str(entry_body);
+        if !entry.ends_with('\n') {
+            entry.push('\n');
+        }
+    } else {
         entry.push('\n');
     }
+
     if !entry.ends_with("\n\n") {
         entry.push('\n');
     }
@@ -186,11 +192,7 @@ pub fn get_carryover_blocks_for_date(
             has_started = true;
         }
 
-        let mut s = raw_line;
-        if is_timestamped_line(s) {
-            // Safe due to timestamp format: "[HH:MM:SS] "
-            s = &s[11..];
-        }
+        let s = strip_timestamp_prefix(raw_line);
 
         let trimmed_start = s.trim_start();
         if current_context.is_none()
@@ -320,11 +322,7 @@ fn parse_task_content(content: &str, path_str: &str) -> Vec<TaskItem> {
             continue;
         }
 
-        let mut s = line;
-        if is_timestamped_line(s) {
-            // Safe due to timestamp format: "[HH:MM:SS] "
-            s = &s[11..];
-        }
+        let s = strip_timestamp_prefix(line);
 
         let (indent_bytes, indent_spaces) = parse_indent(s);
         let s = &s[indent_bytes..];
@@ -492,15 +490,7 @@ pub fn get_last_file_pending_todos(log_path: &Path) -> io::Result<Vec<String>> {
                 for line in content.lines() {
                     if line.contains("- [ ]") {
                         // Strip timestamp "[HH:MM:SS] " prefix
-                        let clean_line = if line.trim_start().starts_with('[') {
-                            if let Some(idx) = line.find("] ") {
-                                &line[idx + 2..]
-                            } else {
-                                line
-                            }
-                        } else {
-                            line
-                        };
+                        let clean_line = strip_timestamp_prefix(line);
                         todos.push(clean_line.trim().to_string());
                     }
                 }
@@ -583,12 +573,7 @@ pub fn get_activity_stats(
                             line_count += 1;
 
                             // Count tomatoes (only from non-carryover tasks)
-                            let s = if is_timestamped_line(line) && line.len() >= 11 {
-                                &line[11..]
-                            } else {
-                                line
-                            };
-                            let s = s.trim_start();
+                            let s = strip_timestamp_prefix(line).trim_start();
 
                             if let Some(text) = s
                                 .strip_prefix("- [ ] ")
@@ -688,11 +673,13 @@ mod tests {
         let content = fs::read_to_string(path).expect("read log");
 
         let first_line = content.lines().next().unwrap_or("");
-        let ts_re = Regex::new(r"^\[\d{2}:\d{2}:\d{2}\] ").unwrap();
+        let ts_re = Regex::new(r"^## \[\d{2}:\d{2}:\d{2}\]$").unwrap();
         assert!(ts_re.is_match(first_line));
-        assert!(!first_line.starts_with("## "));
 
         let lines: Vec<&str> = content.split('\n').collect();
+        assert_eq!(lines.get(1).copied().unwrap_or(""), "First");
+        assert_eq!(lines.get(2).copied().unwrap_or(""), "- item");
+
         let mut timestamps = Vec::new();
         for (idx, line) in lines.iter().enumerate() {
             if is_timestamped_line(line) {
@@ -706,22 +693,22 @@ mod tests {
 
     #[test]
     fn parse_log_content_skips_separator_blank_lines() {
-        let content = "[09:00:00] First\n- item\n\n[09:10:00] Second";
+        let content = "## [09:00:00]\nFirst\n- item\n\n## [09:10:00]\nSecond";
         let entries = parse_log_content(content, "test.md");
         assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].content, "[09:00:00] First\n- item");
+        assert_eq!(entries[0].content, "## [09:00:00]\nFirst\n- item");
         assert_eq!(entries[0].line_number, 0);
-        assert_eq!(entries[0].end_line, 1);
-        assert_eq!(entries[1].line_number, 3);
+        assert_eq!(entries[0].end_line, 2);
+        assert_eq!(entries[1].line_number, 4);
     }
 
     #[test]
     fn parse_log_content_keeps_internal_blank_lines() {
-        let content = "[09:00:00] First\n\n- item\n\n[09:10:00] Second";
+        let content = "## [09:00:00]\nFirst\n\n- item\n\n## [09:10:00]\nSecond";
         let entries = parse_log_content(content, "test.md");
         assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].content, "[09:00:00] First\n\n- item");
-        assert_eq!(entries[0].end_line, 2);
-        assert_eq!(entries[1].line_number, 4);
+        assert_eq!(entries[0].content, "## [09:00:00]\nFirst\n\n- item");
+        assert_eq!(entries[0].end_line, 3);
+        assert_eq!(entries[1].line_number, 5);
     }
 }
