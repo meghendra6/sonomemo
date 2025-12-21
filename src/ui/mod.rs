@@ -545,15 +545,15 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             let is_empty = lines.iter().all(|line| line.trim().is_empty());
             let visible_start = app.textarea_viewport_row as usize;
             let visible_height = input_inner.height as usize;
+            let show_line_numbers = app.config.ui.line_numbers;
 
             let mut rendered: Vec<Line<'static>> = Vec::new();
             if is_empty {
-                rendered.push(Line::from(Span::styled(
+                rendered.push(compose_placeholder_line(
                     PLACEHOLDER_COMPOSE,
-                    Style::default()
-                        .fg(tokens.ui_muted)
-                        .add_modifier(Modifier::DIM),
-                )));
+                    &tokens,
+                    show_line_numbers,
+                ));
             } else {
                 let (cursor_row, _) = app.textarea.cursor();
                 for (idx, line) in lines
@@ -563,7 +563,13 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                     .take(visible_height)
                 {
                     let is_cursor = idx == cursor_row;
-                    rendered.push(compose_render_line(line, &tokens, is_cursor));
+                    rendered.push(compose_render_line(
+                        line,
+                        &tokens,
+                        is_cursor,
+                        idx,
+                        show_line_numbers,
+                    ));
                 }
             }
 
@@ -638,12 +644,14 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                 let row_in_view = cursor_row_u16.saturating_sub(app.textarea_viewport_row);
                 let row_in_view = row_in_view.min(inner.height.saturating_sub(1));
 
-                let col_in_view = (visual_col.min(u16::MAX as usize)) as u16;
-                let col_in_view = col_in_view.min(inner.width.saturating_sub(1));
+            let prefix_width = compose_prefix_width(app.config.ui.line_numbers);
+            let col_in_view = (visual_col.min(u16::MAX as usize)) as u16;
+            let col_in_view = col_in_view.saturating_add(prefix_width);
+            let col_in_view = col_in_view.min(inner.width.saturating_sub(1));
 
-                f.set_cursor_position((inner.x + col_in_view, inner.y + row_in_view));
-            }
+            f.set_cursor_position((inner.x + col_in_view, inner.y + row_in_view));
         }
+    }
     }
 
     render_status_bar(f, status_area, app, &tokens);
@@ -703,13 +711,19 @@ fn truncate(text: &str, max_chars: usize) -> String {
     out
 }
 
+const LINE_NUMBER_WIDTH: usize = 3;
+const LINE_MARKER: &str = "| ";
+
 fn compose_render_line(
     line: &str,
     tokens: &theme::ThemeTokens,
     is_cursor: bool,
+    line_number: usize,
+    show_line_numbers: bool,
 ) -> Line<'static> {
     let (indent_level, indent, rest) = split_indent(line);
-    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut spans: Vec<Span<'static>> =
+        compose_prefix_spans(line_number, tokens, show_line_numbers);
 
     if !indent.is_empty() {
         spans.push(Span::raw(indent.to_string()));
@@ -732,6 +746,49 @@ fn compose_render_line(
         rendered.style = Style::default().bg(tokens.ui_cursorline_bg);
     }
     rendered
+}
+
+fn compose_placeholder_line(
+    placeholder: &str,
+    tokens: &theme::ThemeTokens,
+    show_line_numbers: bool,
+) -> Line<'static> {
+    let mut spans: Vec<Span<'static>> = compose_prefix_spans(0, tokens, show_line_numbers);
+    spans.push(Span::styled(
+        placeholder.to_string(),
+        Style::default()
+            .fg(tokens.ui_muted)
+            .add_modifier(Modifier::DIM),
+    ));
+    Line::from(spans)
+}
+
+fn compose_prefix_spans(
+    line_number: usize,
+    tokens: &theme::ThemeTokens,
+    show_line_numbers: bool,
+) -> Vec<Span<'static>> {
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    if show_line_numbers {
+        let label = format!("{:>width$} ", line_number + 1, width = LINE_NUMBER_WIDTH);
+        spans.push(Span::styled(
+            label,
+            Style::default().fg(tokens.ui_muted),
+        ));
+    }
+    spans.push(Span::styled(
+        LINE_MARKER,
+        Style::default().fg(tokens.ui_muted),
+    ));
+    spans
+}
+
+fn compose_prefix_width(show_line_numbers: bool) -> u16 {
+    let mut width = LINE_MARKER.len() as u16;
+    if show_line_numbers {
+        width += (LINE_NUMBER_WIDTH + 1) as u16;
+    }
+    width
 }
 
 fn split_indent(line: &str) -> (usize, &str, &str) {
@@ -921,6 +978,7 @@ fn file_date(file_path: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::compose_render_line;
+    use super::compose_prefix_width;
     use crate::config::Theme;
     use crate::ui::theme::ThemeTokens;
 
@@ -935,20 +993,33 @@ mod tests {
     fn renders_bullets_with_indentation_levels() {
         let tokens = ThemeTokens::from_theme(&Theme::default());
 
-        let top = compose_render_line("* item1", &tokens, false);
-        assert_eq!(line_to_string(&top), "• item1");
+        let top = compose_render_line("* item1", &tokens, false, 0, false);
+        assert_eq!(line_to_string(&top), "| • item1");
 
-        let nested = compose_render_line("  * sub1", &tokens, false);
-        assert_eq!(line_to_string(&nested), "  ◦ sub1");
+        let nested = compose_render_line("  * sub1", &tokens, false, 1, false);
+        assert_eq!(line_to_string(&nested), "|   ◦ sub1");
 
-        let deep = compose_render_line("    - sub2", &tokens, false);
-        assert_eq!(line_to_string(&deep), "    ▪ sub2");
+        let deep = compose_render_line("    - sub2", &tokens, false, 2, false);
+        assert_eq!(line_to_string(&deep), "|     ▪ sub2");
     }
 
     #[test]
     fn preserves_non_list_lines_verbatim() {
         let tokens = ThemeTokens::from_theme(&Theme::default());
-        let line = compose_render_line("plain text", &tokens, false);
-        assert_eq!(line_to_string(&line), "plain text");
+        let line = compose_render_line("plain text", &tokens, false, 0, false);
+        assert_eq!(line_to_string(&line), "| plain text");
+    }
+
+    #[test]
+    fn renders_line_numbers_in_gutter() {
+        let tokens = ThemeTokens::from_theme(&Theme::default());
+        let line = compose_render_line("plain text", &tokens, false, 9, true);
+        assert_eq!(line_to_string(&line), " 10 | plain text");
+    }
+
+    #[test]
+    fn prefix_width_accounts_for_line_numbers() {
+        assert_eq!(compose_prefix_width(false), 2);
+        assert_eq!(compose_prefix_width(true), 6);
     }
 }

@@ -167,11 +167,21 @@ impl Default for EditorConfig {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(default)]
 pub struct UiConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub theme_preset: Option<String>,
+    pub line_numbers: bool,
+}
+
+impl Default for UiConfig {
+    fn default() -> Self {
+        Self {
+            theme_preset: None,
+            line_numbers: true,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
