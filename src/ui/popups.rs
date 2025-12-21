@@ -1,5 +1,6 @@
 use super::components::centered_rect;
 use crate::app::App;
+use crate::config::ThemePreset;
 use crate::models::Mood;
 use crate::ui::color_parser::parse_color;
 use crate::ui::theme::ThemeTokens;
@@ -282,6 +283,7 @@ pub fn render_help_popup(f: &mut Frame, app: &App) {
                 ("Pomodoro", fmt_keys(&kb.global.pomodoro)),
                 ("Activity", fmt_keys(&kb.global.activity)),
                 ("Log dir", fmt_keys(&kb.global.log_dir)),
+                ("Theme presets", fmt_keys(&kb.global.theme_switcher)),
                 ("Quit", fmt_keys(&kb.global.quit)),
             ],
         ),
@@ -462,6 +464,49 @@ pub fn render_pomodoro_popup(f: &mut Frame, app: &App) {
         .margin(2)
         .split(area)[0];
     f.render_widget(Paragraph::new(body), inner);
+}
+
+pub fn render_theme_switcher_popup(f: &mut Frame, app: &mut App) {
+    let tokens = ThemeTokens::from_theme(&app.config.theme);
+    let block = Block::default()
+        .title(" Theme Presets ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(tokens.ui_border_default));
+    let area = centered_rect(70, 40, f.area());
+    f.render_widget(Clear, area);
+    f.render_widget(block, area);
+
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .margin(1)
+        .split(area);
+
+    let name_style = Style::default().fg(tokens.ui_fg);
+    let desc_style = Style::default().fg(tokens.ui_muted);
+    let items: Vec<ListItem> = ThemePreset::all()
+        .iter()
+        .map(|preset| {
+            let line = Line::from(vec![
+                Span::styled(preset.name(), name_style),
+                Span::raw(" - "),
+                Span::styled(preset.description(), desc_style),
+            ]);
+            ListItem::new(line)
+        })
+        .collect();
+
+    let highlight_style = Style::default()
+        .bg(tokens.ui_selection_bg)
+        .add_modifier(Modifier::BOLD);
+    let list = List::new(items)
+        .highlight_symbol("> ")
+        .highlight_style(highlight_style);
+    f.render_stateful_widget(list, popup_layout[0], &mut app.theme_list_state);
+
+    let help = Paragraph::new("(Up/Down) Move  (Enter) Apply  (Esc) Cancel")
+        .style(Style::default().fg(tokens.ui_muted));
+    f.render_widget(help, popup_layout[1]);
 }
 
 fn fmt_keys(keys: &[String]) -> String {

@@ -57,6 +57,7 @@ The repository root also includes a small `config.toml` you can copy and edit.
 
 You can customize the UI colors by adding a `[theme]` section to `config.toml`.
 Colors accept the built-in names (case-insensitive) or RGB values in `R,G,B` form.
+If `[theme]` is omitted, MemoLog uses a theme preset (see `[ui] theme_preset`).
 
 ```toml
 [theme]
@@ -72,11 +73,25 @@ mood = "Blue"
 timestamp = "LightCyan"
 ```
 
+Theme presets can be selected via config or the Theme Switcher popup.
+
+```toml
+[ui]
+theme_preset = "Dracula Dark"
+```
+
+Available presets:
+- Dracula Dark
+- Solarized Dark
+- Solarized Light
+- Nord Calm
+- Mono Contrast
+
 ## Keybindings (defaults)
 
 All keybindings are configurable in `config.toml`.
 
-- Global: `?` help, `h/l` focus, `i` compose, `/` search, `t` tags, `p` pomodoro, `g` activity, `o` log dir, `Ctrl+Q` quit
+- Global: `?` help, `h/l` focus, `i` compose, `/` search, `t` tags, `T` theme presets, `p` pomodoro, `g` activity, `o` log dir, `Ctrl+Q` quit
 - Timeline: `j/k` move, `e` edit entry, `Enter/Space` toggle checkbox
 - Tasks: `j/k` move, `Enter/Space` toggle checkbox, `p` start/stop pomodoro, `e` edit source entry
 - Composer: `Enter` newline, `Shift+Enter` save, `Tab/Shift+Tab` indent/outdent, `Esc` back

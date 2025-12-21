@@ -18,7 +18,7 @@ mod models;
 mod storage;
 mod ui;
 
-use crate::config::key_match;
+use crate::config::{config_path, key_match, ThemePreset};
 use app::App;
 use chrono::{Duration, Local};
 use models::{InputMode, Mood};
@@ -210,6 +210,10 @@ fn handle_key_input(app: &mut App, key: event::KeyEvent) {
 }
 
 fn handle_popup_events(app: &mut App, key: event::KeyEvent) -> bool {
+    if app.show_theme_popup {
+        handle_theme_switcher_popup(app, key);
+        return true;
+    }
     if app.show_help_popup {
         if key.code == KeyCode::Esc || key_match(&key, &app.config.keybindings.global.help) {
             app.show_help_popup = false;
@@ -412,6 +416,70 @@ fn handle_tag_popup(app: &mut App, key: event::KeyEvent) {
     }
 }
 
+fn open_theme_switcher(app: &mut App) {
+    if app.show_theme_popup {
+        return;
+    }
+
+    let current = app
+        .config
+        .ui
+        .theme_preset
+        .as_deref()
+        .and_then(ThemePreset::from_name)
+        .unwrap_or_else(ThemePreset::default);
+    let selected = ThemePreset::all()
+        .iter()
+        .position(|preset| *preset == current)
+        .unwrap_or(0);
+    app.theme_list_state.select(Some(selected));
+    app.theme_preview_backup = Some(app.config.theme.clone());
+    app.show_theme_popup = true;
+}
+
+fn handle_theme_switcher_popup(app: &mut App, key: event::KeyEvent) {
+    let presets = ThemePreset::all();
+    if presets.is_empty() {
+        app.show_theme_popup = false;
+        return;
+    }
+
+    let selected = app.theme_list_state.selected().unwrap_or(0);
+    if key_match(&key, &app.config.keybindings.popup.up) {
+        let next = if selected == 0 {
+            presets.len() - 1
+        } else {
+            selected - 1
+        };
+        app.theme_list_state.select(Some(next));
+        app.config.theme = config::Theme::preset(presets[next]);
+    } else if key_match(&key, &app.config.keybindings.popup.down) {
+        let next = if selected >= presets.len() - 1 {
+            0
+        } else {
+            selected + 1
+        };
+        app.theme_list_state.select(Some(next));
+        app.config.theme = config::Theme::preset(presets[next]);
+    } else if key_match(&key, &app.config.keybindings.popup.confirm) {
+        let index = app.theme_list_state.selected().unwrap_or(0);
+        let preset = presets[index];
+        app.config.ui.theme_preset = Some(preset.name().to_string());
+        app.config.theme = config::Theme::preset(preset);
+        match app.config.save_to_path(&config_path()) {
+            Ok(_) => app.toast(format!("Theme set to {}.", preset.name())),
+            Err(_) => app.toast("Failed to save theme preset."),
+        }
+        app.theme_preview_backup = None;
+        app.show_theme_popup = false;
+    } else if key_match(&key, &app.config.keybindings.popup.cancel) || key.code == KeyCode::Esc {
+        if let Some(previous) = app.theme_preview_backup.take() {
+            app.config.theme = previous;
+        }
+        app.show_theme_popup = false;
+    }
+}
+
 fn handle_normal_mode(app: &mut App, key: event::KeyEvent) {
     if key_match(&key, &app.config.keybindings.global.help) {
         app.show_help_popup = true;
@@ -562,6 +630,8 @@ fn handle_normal_mode(app: &mut App, key: event::KeyEvent) {
         }
     } else if key_match(&key, &app.config.keybindings.global.log_dir) {
         app.show_path_popup = true;
+    } else if key_match(&key, &app.config.keybindings.global.theme_switcher) {
+        open_theme_switcher(app);
     }
 }
 

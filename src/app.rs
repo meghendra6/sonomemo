@@ -1,4 +1,4 @@
-use crate::config::Config;
+use crate::config::{Config, Theme};
 use crate::models::{
     InputMode, LogEntry, NavigateFocus, PomodoroTarget, TaskItem, count_trailing_tomatoes,
     is_timestamped_line,
@@ -70,6 +70,9 @@ pub struct App<'a> {
     pub show_activity_popup: bool,
     pub activity_data: HashMap<String, (usize, usize)>, // "YYYY-MM-DD" -> (line_count, tomato_count)
     pub show_path_popup: bool,
+    pub show_theme_popup: bool,
+    pub theme_list_state: ListState,
+    pub theme_preview_backup: Option<Theme>,
 
     pub show_pomodoro_popup: bool,
     pub pomodoro_minutes_input: String,
@@ -196,6 +199,9 @@ impl<'a> App<'a> {
             show_activity_popup: false,
             activity_data: HashMap::new(),
             show_path_popup: false,
+            show_theme_popup: false,
+            theme_list_state: ListState::default(),
+            theme_preview_backup: None,
             show_pomodoro_popup: false,
             pomodoro_minutes_input: String::new(),
             pomodoro_pending_task: None,

@@ -61,6 +61,15 @@ fn is_match(key: &KeyEvent, binding: &str) -> bool {
     // Modifier match:
     // - Enter must match modifiers exactly so `enter` and `shift+enter` can coexist.
     // - For other keys, ignore Shift unless explicitly requested (helps BackTab and char keys like '?').
+    // - Alphabetic keys should not match when Shift is held unless explicitly bound (avoid "shift+t" matching "t").
+    if let KeyCode::Char(tc) = target_code {
+        if tc.is_ascii_alphabetic()
+            && !target_modifiers.contains(KeyModifiers::SHIFT)
+            && key.modifiers.contains(KeyModifiers::SHIFT)
+        {
+            return false;
+        }
+    }
     if target_code == KeyCode::Enter {
         return key.modifiers == target_modifiers;
     }
@@ -126,6 +135,7 @@ pub fn config_path() -> PathBuf {
 pub struct Config {
     pub keybindings: KeyBindings,
     pub theme: Theme,
+    pub ui: UiConfig,
     pub editor: EditorConfig,
     pub data: DataConfig,
     pub pomodoro: PomodoroConfig,
@@ -159,6 +169,13 @@ impl Default for EditorConfig {
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 #[serde(default)]
+pub struct UiConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub theme_preset: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(default)]
 pub struct KeyBindings {
     pub global: GlobalBindings,
     pub timeline: TimelineBindings,
@@ -183,6 +200,7 @@ pub struct GlobalBindings {
     pub activity: Vec<String>,
     pub log_dir: Vec<String>,
     pub pomodoro: Vec<String>,
+    pub theme_switcher: Vec<String>,
 }
 
 impl Default for GlobalBindings {
@@ -200,6 +218,7 @@ impl Default for GlobalBindings {
             activity: vec!["g".to_string()],
             log_dir: vec!["o".to_string()],
             pomodoro: vec!["p".to_string()],
+            theme_switcher: vec!["shift+t".to_string()],
         }
     }
 }
@@ -387,60 +406,185 @@ pub struct ThemeToastOverrides {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThemePreset {
-    Dark,
-    Dim,
-    Light,
+    DraculaDark,
+    SolarizedDark,
+    SolarizedLight,
+    NordCalm,
+    MonoContrast,
 }
 
 impl ThemePreset {
     pub fn default() -> Self {
-        ThemePreset::Dark
+        ThemePreset::DraculaDark
+    }
+
+    pub fn all() -> &'static [ThemePreset] {
+        &[
+            ThemePreset::DraculaDark,
+            ThemePreset::SolarizedDark,
+            ThemePreset::SolarizedLight,
+            ThemePreset::NordCalm,
+            ThemePreset::MonoContrast,
+        ]
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            ThemePreset::DraculaDark => "Dracula Dark",
+            ThemePreset::SolarizedDark => "Solarized Dark",
+            ThemePreset::SolarizedLight => "Solarized Light",
+            ThemePreset::NordCalm => "Nord Calm",
+            ThemePreset::MonoContrast => "Mono Contrast",
+        }
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            ThemePreset::DraculaDark => "High-contrast dark with vivid accents.",
+            ThemePreset::SolarizedDark => "Low-contrast dark for long sessions.",
+            ThemePreset::SolarizedLight => "Soft light theme for bright rooms.",
+            ThemePreset::NordCalm => "Cool, calm tones with muted contrast.",
+            ThemePreset::MonoContrast => "Minimal colors with a single accent.",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        ThemePreset::all()
+            .iter()
+            .copied()
+            .find(|preset| preset.name().eq_ignore_ascii_case(name.trim()))
     }
 }
 
 impl Theme {
     pub fn preset(preset: ThemePreset) -> Self {
         match preset {
-            ThemePreset::Dark => Theme {
-                border_default: "Reset".to_string(),
-                border_editing: "Green".to_string(),
-                border_search: "Cyan".to_string(),
-                border_todo_header: "Yellow".to_string(),
-                text_highlight: "50,50,50".to_string(),
-                todo_done: "Green".to_string(),
-                todo_wip: "Red".to_string(),
-                tag: "Yellow".to_string(),
-                mood: "Magenta".to_string(),
-                timestamp: "Blue".to_string(),
-                ui: None,
+            ThemePreset::DraculaDark => Theme {
+                border_default: "80,82,96".to_string(),
+                border_editing: "189,147,249".to_string(),
+                border_search: "139,233,253".to_string(),
+                border_todo_header: "241,250,140".to_string(),
+                text_highlight: "68,71,90".to_string(),
+                todo_done: "80,250,123".to_string(),
+                todo_wip: "255,85,85".to_string(),
+                tag: "255,184,108".to_string(),
+                mood: "255,121,198".to_string(),
+                timestamp: "98,114,164".to_string(),
+                ui: Some(ThemeUiOverrides {
+                    fg: Some("248,248,242".to_string()),
+                    bg: Some("40,42,54".to_string()),
+                    muted: Some("98,114,164".to_string()),
+                    accent: Some("189,147,249".to_string()),
+                    selection_bg: Some("68,71,90".to_string()),
+                    cursorline_bg: Some("68,71,90".to_string()),
+                    toast: Some(ThemeToastOverrides {
+                        info: Some("139,233,253".to_string()),
+                        success: Some("80,250,123".to_string()),
+                        error: Some("255,85,85".to_string()),
+                    }),
+                }),
             },
-            ThemePreset::Dim => Theme {
-                border_default: "DarkGray".to_string(),
-                border_editing: "LightBlue".to_string(),
-                border_search: "LightCyan".to_string(),
-                border_todo_header: "LightYellow".to_string(),
-                text_highlight: "30,30,30".to_string(),
-                todo_done: "LightGreen".to_string(),
-                todo_wip: "LightRed".to_string(),
-                tag: "LightCyan".to_string(),
-                mood: "LightMagenta".to_string(),
-                timestamp: "LightCyan".to_string(),
-                ui: None,
+            ThemePreset::SolarizedDark => Theme {
+                border_default: "88,110,117".to_string(),
+                border_editing: "38,139,210".to_string(),
+                border_search: "42,161,152".to_string(),
+                border_todo_header: "181,137,0".to_string(),
+                text_highlight: "7,54,66".to_string(),
+                todo_done: "133,153,0".to_string(),
+                todo_wip: "220,50,47".to_string(),
+                tag: "181,137,0".to_string(),
+                mood: "211,54,130".to_string(),
+                timestamp: "38,139,210".to_string(),
+                ui: Some(ThemeUiOverrides {
+                    fg: Some("131,148,150".to_string()),
+                    bg: Some("0,43,54".to_string()),
+                    muted: Some("88,110,117".to_string()),
+                    accent: Some("38,139,210".to_string()),
+                    selection_bg: Some("7,54,66".to_string()),
+                    cursorline_bg: Some("7,54,66".to_string()),
+                    toast: Some(ThemeToastOverrides {
+                        info: Some("42,161,152".to_string()),
+                        success: Some("133,153,0".to_string()),
+                        error: Some("220,50,47".to_string()),
+                    }),
+                }),
             },
-            ThemePreset::Light => Theme {
-                border_default: "DarkGray".to_string(),
-                border_editing: "Blue".to_string(),
-                border_search: "Cyan".to_string(),
-                border_todo_header: "Blue".to_string(),
-                text_highlight: "200,200,200".to_string(),
-                todo_done: "Green".to_string(),
-                todo_wip: "Red".to_string(),
-                tag: "Blue".to_string(),
-                mood: "Magenta".to_string(),
-                timestamp: "DarkGray".to_string(),
-                ui: None,
+            ThemePreset::SolarizedLight => Theme {
+                border_default: "147,161,161".to_string(),
+                border_editing: "38,139,210".to_string(),
+                border_search: "42,161,152".to_string(),
+                border_todo_header: "181,137,0".to_string(),
+                text_highlight: "238,232,213".to_string(),
+                todo_done: "133,153,0".to_string(),
+                todo_wip: "220,50,47".to_string(),
+                tag: "38,139,210".to_string(),
+                mood: "211,54,130".to_string(),
+                timestamp: "147,161,161".to_string(),
+                ui: Some(ThemeUiOverrides {
+                    fg: Some("101,123,131".to_string()),
+                    bg: Some("253,246,227".to_string()),
+                    muted: Some("147,161,161".to_string()),
+                    accent: Some("38,139,210".to_string()),
+                    selection_bg: Some("238,232,213".to_string()),
+                    cursorline_bg: Some("238,232,213".to_string()),
+                    toast: Some(ThemeToastOverrides {
+                        info: Some("42,161,152".to_string()),
+                        success: Some("133,153,0".to_string()),
+                        error: Some("220,50,47".to_string()),
+                    }),
+                }),
+            },
+            ThemePreset::NordCalm => Theme {
+                border_default: "76,86,106".to_string(),
+                border_editing: "136,192,208".to_string(),
+                border_search: "143,188,187".to_string(),
+                border_todo_header: "129,161,193".to_string(),
+                text_highlight: "59,66,82".to_string(),
+                todo_done: "163,190,140".to_string(),
+                todo_wip: "191,97,106".to_string(),
+                tag: "235,203,139".to_string(),
+                mood: "180,142,173".to_string(),
+                timestamp: "94,129,172".to_string(),
+                ui: Some(ThemeUiOverrides {
+                    fg: Some("216,222,233".to_string()),
+                    bg: Some("46,52,64".to_string()),
+                    muted: Some("94,129,172".to_string()),
+                    accent: Some("136,192,208".to_string()),
+                    selection_bg: Some("59,66,82".to_string()),
+                    cursorline_bg: Some("59,66,82".to_string()),
+                    toast: Some(ThemeToastOverrides {
+                        info: Some("143,188,187".to_string()),
+                        success: Some("163,190,140".to_string()),
+                        error: Some("191,97,106".to_string()),
+                    }),
+                }),
+            },
+            ThemePreset::MonoContrast => Theme {
+                border_default: "64,64,64".to_string(),
+                border_editing: "224,192,64".to_string(),
+                border_search: "128,128,128".to_string(),
+                border_todo_header: "224,192,64".to_string(),
+                text_highlight: "42,42,42".to_string(),
+                todo_done: "200,200,200".to_string(),
+                todo_wip: "220,80,80".to_string(),
+                tag: "200,200,200".to_string(),
+                mood: "200,200,200".to_string(),
+                timestamp: "160,160,160".to_string(),
+                ui: Some(ThemeUiOverrides {
+                    fg: Some("240,240,240".to_string()),
+                    bg: Some("16,16,16".to_string()),
+                    muted: Some("128,128,128".to_string()),
+                    accent: Some("224,192,64".to_string()),
+                    selection_bg: Some("42,42,42".to_string()),
+                    cursorline_bg: Some("42,42,42".to_string()),
+                    toast: Some(ThemeToastOverrides {
+                        info: Some("224,192,64".to_string()),
+                        success: Some("200,200,200".to_string()),
+                        error: Some("220,80,80".to_string()),
+                    }),
+                }),
             },
         }
     }
@@ -477,7 +621,13 @@ impl Config {
             match toml::from_str::<Config>(&content) {
                 Ok(mut config) => {
                     if !has_theme {
-                        config.theme = Theme::preset(ThemePreset::default());
+                        let preset = config
+                            .ui
+                            .theme_preset
+                            .as_deref()
+                            .and_then(ThemePreset::from_name)
+                            .unwrap_or_else(ThemePreset::default);
+                        config.theme = Theme::preset(preset);
                     }
                     config
                 }
@@ -488,7 +638,13 @@ impl Config {
             }
         } else {
             let mut config = Config::default();
-            config.theme = Theme::preset(ThemePreset::default());
+            let preset = config
+                .ui
+                .theme_preset
+                .as_deref()
+                .and_then(ThemePreset::from_name)
+                .unwrap_or_else(ThemePreset::default);
+            config.theme = Theme::preset(preset);
             config
         };
 
@@ -558,8 +714,23 @@ mod tests {
 
     #[test]
     fn presets_construct_without_panicking() {
-        let _dark = Theme::preset(ThemePreset::Dark);
-        let _dim = Theme::preset(ThemePreset::Dim);
-        let _light = Theme::preset(ThemePreset::Light);
+        let _dracula = Theme::preset(ThemePreset::DraculaDark);
+        let _solarized_dark = Theme::preset(ThemePreset::SolarizedDark);
+        let _solarized_light = Theme::preset(ThemePreset::SolarizedLight);
+        let _nord = Theme::preset(ThemePreset::NordCalm);
+        let _mono = Theme::preset(ThemePreset::MonoContrast);
+    }
+
+    #[test]
+    fn preset_name_lookup_is_case_insensitive() {
+        assert_eq!(
+            ThemePreset::from_name("dracula dark"),
+            Some(ThemePreset::DraculaDark)
+        );
+        assert_eq!(
+            ThemePreset::from_name("Solarized Light"),
+            Some(ThemePreset::SolarizedLight)
+        );
+        assert_eq!(ThemePreset::from_name("unknown"), None);
     }
 }
