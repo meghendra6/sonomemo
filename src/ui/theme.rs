@@ -3,6 +3,7 @@ use crate::ui::color_parser::parse_color;
 use ratatui::style::Color;
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ThemeTokens {
     pub ui_border_default: Color,
     pub ui_border_editing: Color,
