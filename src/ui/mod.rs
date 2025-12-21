@@ -7,7 +7,7 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, List, ListItem, Paragraph},
 };
 
-use crate::app::App;
+use crate::app::{App, PLACEHOLDER_COMPOSE};
 use crate::models::{InputMode, NavigateFocus, is_timestamped_line};
 use ratatui::style::Stylize;
 use regex::Regex;
@@ -529,18 +529,46 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             let input_block = Block::default().borders(Borders::NONE);
             let input_inner = input_block.inner(editor_area);
             app.textarea.set_block(input_block);
-            app.textarea
-                .set_cursor_line_style(Style::default().bg(tokens.ui_cursorline_bg));
-            app.textarea
-                .set_selection_style(Style::default().bg(tokens.ui_selection_bg));
-            app.textarea
-                .set_placeholder_style(
+            app.textarea.set_cursor_style(Style::default().reversed());
+
+            if input_inner.height > 0 {
+                let (cursor_row, _) = app.textarea.cursor();
+                let cursor_row_u16 = (cursor_row.min(u16::MAX as usize)) as u16;
+                app.textarea_viewport_row = next_scroll_top(
+                    app.textarea_viewport_row,
+                    cursor_row_u16,
+                    input_inner.height,
+                );
+            }
+
+            let lines = app.textarea.lines();
+            let is_empty = lines.iter().all(|line| line.trim().is_empty());
+            let visible_start = app.textarea_viewport_row as usize;
+            let visible_height = input_inner.height as usize;
+
+            let mut rendered: Vec<Line<'static>> = Vec::new();
+            if is_empty {
+                rendered.push(Line::from(Span::styled(
+                    PLACEHOLDER_COMPOSE,
                     Style::default()
                         .fg(tokens.ui_muted)
                         .add_modifier(Modifier::DIM),
-                );
-            app.textarea.set_cursor_style(Style::default().reversed());
-            f.render_widget(&app.textarea, editor_area);
+                )));
+            } else {
+                let (cursor_row, _) = app.textarea.cursor();
+                for (idx, line) in lines
+                    .iter()
+                    .enumerate()
+                    .skip(visible_start)
+                    .take(visible_height)
+                {
+                    let is_cursor = idx == cursor_row;
+                    rendered.push(compose_render_line(line, &tokens, is_cursor));
+                }
+            }
+
+            let paragraph = Paragraph::new(rendered).style(Style::default().fg(tokens.ui_fg));
+            f.render_widget(paragraph, editor_area);
             cursor_area = Some(input_inner);
         }
         InputMode::Search => {
@@ -673,6 +701,73 @@ fn truncate(text: &str, max_chars: usize) -> String {
         .collect::<String>();
     out.push('…');
     out
+}
+
+fn compose_render_line(
+    line: &str,
+    tokens: &theme::ThemeTokens,
+    is_cursor: bool,
+) -> Line<'static> {
+    let (indent_level, indent, rest) = split_indent(line);
+    let mut spans: Vec<Span<'static>> = Vec::new();
+
+    if !indent.is_empty() {
+        spans.push(Span::raw(indent.to_string()));
+    }
+
+    if let Some((bullet, tail)) = replace_list_bullet(rest, indent_level) {
+        spans.push(Span::styled(
+            format!("{bullet} "),
+            Style::default()
+                .fg(tokens.ui_accent)
+                .add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::raw(tail.to_string()));
+    } else {
+        spans.push(Span::raw(rest.to_string()));
+    }
+
+    let mut rendered = Line::from(spans);
+    if is_cursor {
+        rendered.style = Style::default().bg(tokens.ui_cursorline_bg);
+    }
+    rendered
+}
+
+fn split_indent(line: &str) -> (usize, &str, &str) {
+    let mut spaces = 0usize;
+    let mut split_at = 0usize;
+    for (idx, ch) in line.char_indices() {
+        match ch {
+            ' ' => {
+                spaces += 1;
+                split_at = idx + ch.len_utf8();
+            }
+            '\t' => {
+                spaces += 4;
+                split_at = idx + ch.len_utf8();
+            }
+            _ => break,
+        }
+    }
+    let (indent, rest) = line.split_at(split_at);
+    (spaces / 2, indent, rest)
+}
+
+fn replace_list_bullet<'a>(rest: &'a str, indent_level: usize) -> Option<(char, &'a str)> {
+    if rest.starts_with("- ") || rest.starts_with("* ") || rest.starts_with("+ ") {
+        return Some((bullet_for_level(indent_level), &rest[2..]));
+    }
+    None
+}
+
+fn bullet_for_level(level: usize) -> char {
+    match level {
+        0 => '•',
+        1 => '◦',
+        2 => '▪',
+        _ => '▫',
+    }
 }
 
 fn render_status_bar(f: &mut Frame, area: Rect, app: &App, tokens: &theme::ThemeTokens) {
@@ -821,4 +916,39 @@ fn file_date(file_path: &str) -> Option<String> {
         .file_stem()
         .and_then(|s| s.to_str())
         .map(|s| s.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::compose_render_line;
+    use crate::config::Theme;
+    use crate::ui::theme::ThemeTokens;
+
+    fn line_to_string(line: &ratatui::text::Line<'_>) -> String {
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>()
+    }
+
+    #[test]
+    fn renders_bullets_with_indentation_levels() {
+        let tokens = ThemeTokens::from_theme(&Theme::default());
+
+        let top = compose_render_line("* item1", &tokens, false);
+        assert_eq!(line_to_string(&top), "• item1");
+
+        let nested = compose_render_line("  * sub1", &tokens, false);
+        assert_eq!(line_to_string(&nested), "  ◦ sub1");
+
+        let deep = compose_render_line("    - sub2", &tokens, false);
+        assert_eq!(line_to_string(&deep), "    ▪ sub2");
+    }
+
+    #[test]
+    fn preserves_non_list_lines_verbatim() {
+        let tokens = ThemeTokens::from_theme(&Theme::default());
+        let line = compose_render_line("plain text", &tokens, false);
+        assert_eq!(line_to_string(&line), "plain text");
+    }
 }
