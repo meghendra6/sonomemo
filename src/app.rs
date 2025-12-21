@@ -1,7 +1,7 @@
 use crate::config::{Config, Theme};
 use crate::models::{
     InputMode, LogEntry, NavigateFocus, PomodoroTarget, TaskItem, count_trailing_tomatoes,
-    is_timestamped_line,
+    is_heading_timestamp_line, split_timestamp_line, strip_timestamp_prefix,
 };
 use crate::storage;
 use chrono::{DateTime, Duration, Local, NaiveDate};
@@ -25,7 +25,7 @@ pub struct EditingEntry {
     pub file_path: String,
     pub start_line: usize,
     pub end_line: usize,
-    pub timestamp_prefix: String, // e.g. "[12:34:56] "
+    pub timestamp_prefix: String, // e.g. "## [12:34:56]"
     pub from_search: bool,
     pub search_query: Option<String>,
 }
@@ -228,7 +228,11 @@ impl<'a> App<'a> {
 
         let first_line = lines.remove(0);
         let (timestamp_prefix, first_content) = split_timestamp_prefix(&first_line);
-        lines.insert(0, first_content);
+        if !first_content.is_empty() {
+            lines.insert(0, first_content);
+        } else if lines.is_empty() {
+            lines.push(String::new());
+        }
 
         self.textarea = TextArea::from(lines);
         self.editing_entry = Some(EditingEntry {
@@ -534,10 +538,12 @@ impl<'a> App<'a> {
 }
 
 fn split_timestamp_prefix(line: &str) -> (String, String) {
-    // "[HH:MM:SS] " is 11 bytes.
-    let bytes = line.as_bytes();
-    if bytes.len() >= 11 && bytes[0] == b'[' && bytes[9] == b']' && bytes[10] == b' ' {
-        (line[..11].to_string(), line[11..].to_string())
+    if let Some((prefix, rest)) = split_timestamp_line(line) {
+        if is_heading_timestamp_line(line) {
+            (line.trim_end().to_string(), rest.to_string())
+        } else {
+            (prefix.trim_end().to_string(), rest.to_string())
+        }
     } else {
         ("".to_string(), line.to_string())
     }
@@ -552,11 +558,7 @@ fn compute_today_task_stats(logs: &[LogEntry]) -> (usize, usize) {
 
     for entry in logs {
         for line in entry.content.lines() {
-            let mut s = line;
-            if is_timestamped_line(s) {
-                s = &s[11..];
-            }
-            let s = s.trim_start();
+            let s = strip_timestamp_prefix(line).trim_start();
 
             // Skip carryover header lines
             if s.starts_with("⤴ Carryover from ") {

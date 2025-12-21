@@ -19,6 +19,7 @@ mod storage;
 mod ui;
 
 use crate::config::{config_path, key_match, ThemePreset};
+use crate::models::split_timestamp_line;
 use app::App;
 use chrono::{Duration, Local};
 use models::{InputMode, Mood};
@@ -704,16 +705,20 @@ fn handle_editing_mode(app: &mut App, key: event::KeyEvent) {
             let selection_hint = (editing.file_path.clone(), editing.start_line);
             let mut new_lines: Vec<String> = Vec::new();
             if !is_empty {
-                let timestamp_prefix = if editing.timestamp_prefix.is_empty() {
-                    format!("[{}] ", Local::now().format("%H:%M:%S"))
+                let heading_time = if editing.timestamp_prefix.is_empty() {
+                    Local::now().format("%H:%M:%S").to_string()
+                } else if let Some((prefix, _)) = split_timestamp_line(&editing.timestamp_prefix) {
+                    prefix
+                        .trim()
+                        .trim_start_matches('[')
+                        .trim_end_matches(']')
+                        .to_string()
                 } else {
-                    editing.timestamp_prefix
+                    Local::now().format("%H:%M:%S").to_string()
                 };
 
-                let mut it = lines.into_iter();
-                let first = it.next().unwrap_or_default();
-                new_lines.push(format!("{timestamp_prefix}{first}"));
-                new_lines.extend(it);
+                new_lines.push(format!("## [{heading_time}]"));
+                new_lines.extend(lines.into_iter());
             }
 
             if let Err(e) = storage::replace_entry_lines(
