@@ -2,14 +2,13 @@ use chrono::Local;
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, BorderType, Borders, List, ListItem, Paragraph},
 };
 
 use crate::app::App;
 use crate::models::{InputMode, NavigateFocus, is_timestamped_line};
-use crate::ui::color_parser::parse_color;
 use ratatui::style::Stylize;
 use std::path::Path;
 use unicode_width::UnicodeWidthStr;
@@ -61,11 +60,25 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
             .split(main_area);
 
+        let timeline_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(1), Constraint::Min(1)])
+            .split(top_chunks[0]);
+        let tasks_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(1), Constraint::Min(1)])
+            .split(top_chunks[1]);
+
+        let timeline_header_area = timeline_chunks[0];
+        let timeline_body_area = timeline_chunks[1];
+        let tasks_header_area = tasks_chunks[0];
+        let tasks_body_area = tasks_chunks[1];
+
         // Timeline log view
-        let list_area_width = top_chunks[0].width.saturating_sub(4) as usize;
+        let list_area_width = timeline_body_area.width.saturating_sub(1).max(1) as usize;
         let timestamp_width: usize = 11; // "[HH:MM:SS] "
         let blank_timestamp = " ".repeat(timestamp_width);
-        let timestamp_color = parse_color(&app.config.theme.timestamp);
+        let timestamp_color = tokens.content_timestamp;
 
     // Track current date for separator rendering and maintain index mapping
     let mut last_date: Option<String> = None;
@@ -82,12 +95,12 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                     let separator_line = Line::from(vec![
                         Span::styled(
                             "─".repeat(list_area_width.saturating_sub(current_date.len() + 2)),
-                            Style::default().fg(Color::DarkGray),
+                            Style::default().fg(tokens.ui_muted),
                         ),
                         Span::styled(
                             format!(" {} ", current_date),
                             Style::default()
-                                .fg(Color::Cyan)
+                                .fg(tokens.ui_accent)
                                 .add_modifier(Modifier::BOLD),
                         ),
                     ]);
@@ -144,7 +157,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                         Span::styled(
                             format!("{date} "),
                             Style::default()
-                                .fg(Color::DarkGray)
+                                .fg(tokens.ui_muted)
                                 .add_modifier(Modifier::BOLD),
                         )
                     } else {
@@ -194,9 +207,6 @@ pub fn ui(f: &mut Frame, app: &mut App) {
     let is_tasks_focused =
         app.input_mode == InputMode::Navigate && app.navigate_focus == NavigateFocus::Tasks;
 
-    let focus_mark_timeline = if is_timeline_focused { "▶" } else { " " };
-    let focus_mark_tasks = if is_tasks_focused { "▶" } else { " " };
-
     // Collect status information (used in both search and normal mode)
     let focus_info = if let Some(selected_idx) = app.logs_state.selected() {
         if let Some(entry) = app.logs.get(selected_idx) {
@@ -232,93 +242,98 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         focus_info, task_summary, app.today_tomatoes
     );
 
-    let title = if app.is_search_result {
-        format!(
-            " 🔍 Search: {} found · {} (Esc to reset) ",
-            app.logs.len(),
-            stats_summary
-        )
+    let pomodoro = if let Some(end_time) = app.pomodoro_end {
+        let now = Local::now();
+        if now < end_time {
+            let remaining = end_time - now;
+            let total_secs = remaining.num_seconds();
+            let mins = remaining.num_minutes();
+            let secs = total_secs % 60;
+
+            let target = match app.pomodoro_target.as_ref() {
+                Some(crate::models::PomodoroTarget::Task { text, .. }) => {
+                    format!(" {}", truncate(text, 20))
+                }
+                _ => "".to_string(),
+            };
+
+            let elapsed_ratio = if let Some(start) = app.pomodoro_start {
+                let total_duration = (end_time - start).num_seconds() as f32;
+                let elapsed = (now - start).num_seconds() as f32;
+                (elapsed / total_duration).min(1.0)
+            } else {
+                0.0
+            };
+            let bar_width = 10;
+            let filled = (elapsed_ratio * bar_width as f32) as usize;
+            let empty = bar_width - filled;
+            let progress_bar = format!("{}{}", "█".repeat(filled), "░".repeat(empty));
+
+            let urgency = if mins < 1 {
+                "🔴"
+            } else if mins < 5 {
+                "🟡"
+            } else {
+                "🟢"
+            };
+
+            format!(
+                " [{} 🍅 {:02}:{:02} {}{}]",
+                urgency, mins, secs, progress_bar, target
+            )
+        } else {
+            String::new()
+        }
+    } else {
+        String::new()
+    };
+
+    let title_label = if app.is_search_result {
+        "Search"
+    } else {
+        "Timeline"
+    };
+
+    let summary = if app.is_search_result {
+        let mut parts = Vec::new();
+        parts.push(format!("{} results", app.logs.len()));
+        if let Some(query) = app.last_search_query.as_deref() {
+            if !query.trim().is_empty() {
+                parts.push(format!("\"{}\"", query.trim()));
+            }
+        }
+        parts.push(stats_summary.clone());
+        parts.join(" · ")
     } else {
         let time = Local::now().format("%Y-%m-%d %H:%M");
-        let pomodoro = if let Some(end_time) = app.pomodoro_end {
-            let now = Local::now();
-            if now < end_time {
-                let remaining = end_time - now;
-                let total_secs = remaining.num_seconds();
-                let mins = remaining.num_minutes();
-                let secs = total_secs % 60;
-
-                let target = match app.pomodoro_target.as_ref() {
-                    Some(crate::models::PomodoroTarget::Task { text, .. }) => {
-                        format!(" {}", truncate(text, 20))
-                    }
-                    _ => "".to_string(),
-                };
-
-                // Progress bar: calculate based on actual duration
-                let elapsed_ratio = if let Some(start) = app.pomodoro_start {
-                    let total_duration = (end_time - start).num_seconds() as f32;
-                    let elapsed = (now - start).num_seconds() as f32;
-                    (elapsed / total_duration).min(1.0)
-                } else {
-                    // Fallback if start time not tracked
-                    0.0
-                };
-                let bar_width = 10;
-                let filled = (elapsed_ratio * bar_width as f32) as usize;
-                let empty = bar_width - filled;
-                let progress_bar = format!("{}{}", "█".repeat(filled), "░".repeat(empty));
-
-                // Color indicator based on remaining time
-                let urgency = if mins < 1 {
-                    "🔴"
-                } else if mins < 5 {
-                    "🟡"
-                } else {
-                    "🟢"
-                };
-
-                format!(
-                    " [{} 🍅 {:02}:{:02} {}{}]",
-                    urgency, mins, secs, progress_bar, target
-                )
-            } else {
-                "".to_string()
-            }
-        } else {
-            "".to_string()
-        };
-
-        let summary = format!("Entries {} · {}", app.logs.len(), stats_summary);
-
-        format!(" {focus_mark_timeline} MEMOLOG · {time} · {summary}{pomodoro} ")
+        let base = format!("{} · Entries {} · {}", time, app.logs.len(), stats_summary);
+        format!("{base}{pomodoro}")
     };
 
-    // Border color based on current mode
-    let main_border_color = match app.input_mode {
-        InputMode::Navigate => parse_color(&app.config.theme.border_default),
-        InputMode::Editing => parse_color(&app.config.theme.border_editing),
-        InputMode::Search => parse_color(&app.config.theme.border_search),
+    let title_style = if is_timeline_focused {
+        Style::default()
+            .fg(tokens.ui_accent)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(tokens.ui_muted)
+    };
+    let dot_style = if is_timeline_focused {
+        Style::default().fg(tokens.ui_accent)
+    } else {
+        Style::default().fg(tokens.ui_muted)
     };
 
-    let logs_block =
-        Block::default()
-            .borders(Borders::ALL)
-            .border_type(if is_timeline_focused {
-                BorderType::Thick
-            } else {
-                BorderType::Plain
-            })
-            .border_style(Style::default().fg(main_border_color).add_modifier(
-                if is_timeline_focused {
-                    Modifier::BOLD
-                } else {
-                    Modifier::empty()
-                },
-            ))
-            .title(title);
+    let header = Paragraph::new(Line::from(vec![
+        Span::styled("•", dot_style),
+        Span::raw(" "),
+        Span::styled(title_label, title_style),
+        Span::raw("  "),
+        Span::styled(summary, Style::default().fg(tokens.ui_muted)),
+    ]))
+    .style(Style::default().fg(tokens.ui_fg));
+    f.render_widget(header, timeline_header_area);
 
-    let highlight_bg = parse_color(&app.config.theme.text_highlight);
+    let highlight_bg = tokens.ui_selection_bg;
     let logs_highlight_style = if is_timeline_focused {
         Style::default()
             .bg(highlight_bg)
@@ -328,16 +343,15 @@ pub fn ui(f: &mut Frame, app: &mut App) {
     };
 
     let logs_list = List::new(list_items)
-        .block(logs_block)
-        .highlight_symbol("▶ ")
+        .highlight_symbol("")
         .highlight_style(logs_highlight_style);
 
     // Persist list offset across frames to avoid "cursor pinned" scroll behavior.
     app.timeline_ui_state.select(ui_selected_index);
-    f.render_stateful_widget(logs_list, top_chunks[0], &mut app.timeline_ui_state);
+    f.render_stateful_widget(logs_list, timeline_body_area, &mut app.timeline_ui_state);
 
     // Right panel: Today's tasks
-    let todo_area_width = top_chunks[1].width.saturating_sub(2) as usize;
+    let todo_area_width = tasks_body_area.width.saturating_sub(1).max(1) as usize;
 
     let todos: Vec<ListItem> = app
         .tasks
@@ -422,34 +436,37 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         })
         .collect();
 
-    let todo_border_color = parse_color(&app.config.theme.border_todo_header);
-
-    let todo_border_style = if is_tasks_focused {
-        Style::default()
-            .fg(todo_border_color)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(todo_border_color)
-    };
-
-    let todo_title = format!(
-        " {focus_mark_tasks} Tasks · Open {} · Done {} · 🍅 {} ",
+    let tasks_summary = format!(
+        "Open {} · Done {} · 🍅 {}",
         app.tasks.len(),
         app.today_done_tasks,
         app.today_tomatoes
     );
 
-    let todo_block = Block::default()
-        .borders(Borders::ALL)
-        .title(todo_title)
-        .border_type(if is_tasks_focused {
-            BorderType::Thick
-        } else {
-            BorderType::Plain
-        })
-        .border_style(todo_border_style);
+    let tasks_title_style = if is_tasks_focused {
+        Style::default()
+            .fg(tokens.ui_accent)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(tokens.ui_muted)
+    };
+    let tasks_dot_style = if is_tasks_focused {
+        Style::default().fg(tokens.ui_accent)
+    } else {
+        Style::default().fg(tokens.ui_muted)
+    };
 
-    let highlight_bg = parse_color(&app.config.theme.text_highlight);
+    let tasks_header = Paragraph::new(Line::from(vec![
+        Span::styled("•", tasks_dot_style),
+        Span::raw(" "),
+        Span::styled("Tasks", tasks_title_style),
+        Span::raw("  "),
+        Span::styled(tasks_summary, Style::default().fg(tokens.ui_muted)),
+    ]))
+    .style(Style::default().fg(tokens.ui_fg));
+    f.render_widget(tasks_header, tasks_header_area);
+
+    let highlight_bg = tokens.ui_selection_bg;
     let todo_highlight_style = if is_tasks_focused {
         Style::default()
             .bg(highlight_bg)
@@ -458,11 +475,10 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         Style::default().bg(highlight_bg)
     };
 
-        let todo_list = List::new(todos)
-            .block(todo_block)
-            .highlight_symbol("▶ ")
-            .highlight_style(todo_highlight_style);
-        f.render_stateful_widget(todo_list, top_chunks[1], &mut app.tasks_state);
+    let todo_list = List::new(todos)
+        .highlight_symbol("")
+        .highlight_style(todo_highlight_style);
+    f.render_stateful_widget(todo_list, tasks_body_area, &mut app.tasks_state);
     }
 
     match app.input_mode {
