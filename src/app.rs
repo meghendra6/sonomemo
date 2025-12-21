@@ -11,7 +11,7 @@ use std::path::Path;
 use tui_textarea::CursorMove;
 use tui_textarea::TextArea;
 
-const PLACEHOLDER_COMPOSE: &str = "Write your note here… (Shift+Enter to save, Esc to go back)";
+pub const PLACEHOLDER_COMPOSE: &str = "Write your note here… (Shift+Enter to save, Esc to go back)";
 const PLACEHOLDER_NAVIGATE: &str = "Navigate (press ? for help)…";
 const PLACEHOLDER_SEARCH: &str = "Search…";
 
