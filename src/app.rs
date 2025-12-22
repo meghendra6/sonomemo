@@ -92,6 +92,14 @@ pub struct App<'a> {
     pub earliest_available_date: Option<NaiveDate>,
     pub is_loading_more: bool,
 
+    // Entry-level scroll offset for tall entries (row-based scroll within a single entry)
+    pub entry_scroll_offset: usize,
+    // Flag to indicate we should scroll to the bottom of the selected entry on next render
+    pub entry_scroll_to_bottom: bool,
+    // Cached values for the selected entry's line count and viewport height (set during render)
+    pub selected_entry_line_count: usize,
+    pub timeline_viewport_height: usize,
+
     // Configuration
     pub config: Config,
 }
@@ -214,6 +222,10 @@ impl<'a> App<'a> {
             loaded_start_date: Some(effective_start),
             earliest_available_date,
             is_loading_more: false,
+            entry_scroll_offset: 0,
+            entry_scroll_to_bottom: false,
+            selected_entry_line_count: 0,
+            timeline_viewport_height: 0,
             config,
         }
     }
@@ -251,6 +263,10 @@ impl<'a> App<'a> {
     pub fn update_logs(&mut self) {
         let today = Local::now().date_naive();
         let preserve_selection = self.logs_state.selected();
+
+        // Reset entry scroll offset when logs are updated
+        self.entry_scroll_offset = 0;
+        self.entry_scroll_to_bottom = false;
 
         // Reload logs for the current date range
         if let Some(start) = self.loaded_start_date {
@@ -353,11 +369,9 @@ impl<'a> App<'a> {
 
         let mut older_logs = Vec::new();
         for date in dates_to_load {
-            if let Ok(mut day_logs) = storage::read_entries_for_date_range(
-                &self.config.data.log_path,
-                *date,
-                *date,
-            ) {
+            if let Ok(mut day_logs) =
+                storage::read_entries_for_date_range(&self.config.data.log_path, *date, *date)
+            {
                 older_logs.append(&mut day_logs);
             }
         }
@@ -391,8 +405,10 @@ impl<'a> App<'a> {
                 self.timeline_ui_state
                     .select(Some(ui_selected.saturating_add(inserted_ui_items)));
             }
-            *self.timeline_ui_state.offset_mut() =
-                self.timeline_ui_state.offset().saturating_add(inserted_ui_items);
+            *self.timeline_ui_state.offset_mut() = self
+                .timeline_ui_state
+                .offset()
+                .saturating_add(inserted_ui_items);
         }
 
         self.toast(format!("✓ Loaded {} more entries", inserted_entries));
@@ -406,6 +422,12 @@ impl<'a> App<'a> {
 
     pub fn scroll_up(&mut self) {
         if self.logs.is_empty() || self.is_loading_more {
+            return;
+        }
+
+        // If currently scrolled within a tall entry, scroll up within it first
+        if self.entry_scroll_offset > 0 {
+            self.entry_scroll_offset = self.entry_scroll_offset.saturating_sub(1);
             return;
         }
 
@@ -423,11 +445,28 @@ impl<'a> App<'a> {
             None => 0,
         };
         self.logs_state.select(Some(i));
+        // Reset scroll offset when moving to a different entry
+        // and position at the bottom of the new entry if it's tall
+        self.entry_scroll_offset = 0;
+        self.entry_scroll_to_bottom = true;
     }
 
     pub fn scroll_down(&mut self) {
         if self.logs.is_empty() {
             return;
+        }
+
+        // Check if we can scroll down within the current tall entry
+        if self.selected_entry_line_count > self.timeline_viewport_height
+            && self.timeline_viewport_height > 0
+        {
+            let max_offset = self
+                .selected_entry_line_count
+                .saturating_sub(self.timeline_viewport_height);
+            if self.entry_scroll_offset < max_offset {
+                self.entry_scroll_offset += 1;
+                return;
+            }
         }
 
         let i = match self.logs_state.selected() {
@@ -441,6 +480,8 @@ impl<'a> App<'a> {
             None => 0,
         };
         self.logs_state.select(Some(i));
+        // Reset scroll offset when moving to a different entry
+        self.entry_scroll_offset = 0;
     }
 
     pub fn scroll_to_top(&mut self) {
@@ -448,6 +489,7 @@ impl<'a> App<'a> {
             return;
         }
         self.logs_state.select(Some(0));
+        self.entry_scroll_offset = 0;
         *self.timeline_ui_state.offset_mut() = 0;
     }
 
@@ -456,6 +498,7 @@ impl<'a> App<'a> {
             return;
         }
         self.logs_state.select(Some(self.logs.len() - 1));
+        self.entry_scroll_offset = 0;
     }
 
     pub fn quit(&mut self) {
@@ -616,4 +659,127 @@ fn file_date(file_path: &str) -> Option<String> {
         .file_stem()
         .and_then(|s| s.to_str())
         .map(|s| s.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_test_app() -> App<'static> {
+        let mut app = App::new();
+        // Create some test log entries
+        app.logs = vec![
+            LogEntry {
+                content: "Short entry".to_string(),
+                file_path: "/test/2025-12-22.md".to_string(),
+                line_number: 1,
+                end_line: 1,
+            },
+            LogEntry {
+                content: "Another short entry".to_string(),
+                file_path: "/test/2025-12-22.md".to_string(),
+                line_number: 2,
+                end_line: 2,
+            },
+        ];
+        app.logs_state.select(Some(0));
+        app
+    }
+
+    #[test]
+    fn scroll_down_moves_to_next_entry_when_not_tall() {
+        let mut app = make_test_app();
+        app.logs_state.select(Some(0));
+        app.selected_entry_line_count = 5;
+        app.timeline_viewport_height = 10; // Entry fits in viewport
+
+        app.scroll_down();
+
+        assert_eq!(app.logs_state.selected(), Some(1));
+        assert_eq!(app.entry_scroll_offset, 0);
+    }
+
+    #[test]
+    fn scroll_down_scrolls_within_tall_entry() {
+        let mut app = make_test_app();
+        app.logs_state.select(Some(0));
+        app.selected_entry_line_count = 30;
+        app.timeline_viewport_height = 10; // Entry is taller than viewport
+        app.entry_scroll_offset = 0;
+
+        app.scroll_down();
+
+        // Should scroll within entry, not move to next
+        assert_eq!(app.logs_state.selected(), Some(0));
+        assert_eq!(app.entry_scroll_offset, 1);
+    }
+
+    #[test]
+    fn scroll_down_moves_to_next_after_reaching_bottom_of_tall_entry() {
+        let mut app = make_test_app();
+        app.logs_state.select(Some(0));
+        app.selected_entry_line_count = 30;
+        app.timeline_viewport_height = 10;
+        app.entry_scroll_offset = 20; // At max offset (30 - 10)
+
+        app.scroll_down();
+
+        // Should move to next entry and reset offset
+        assert_eq!(app.logs_state.selected(), Some(1));
+        assert_eq!(app.entry_scroll_offset, 0);
+    }
+
+    #[test]
+    fn scroll_up_scrolls_within_tall_entry() {
+        let mut app = make_test_app();
+        app.logs_state.select(Some(1));
+        app.selected_entry_line_count = 30;
+        app.timeline_viewport_height = 10;
+        app.entry_scroll_offset = 5;
+
+        app.scroll_up();
+
+        // Should scroll within entry
+        assert_eq!(app.logs_state.selected(), Some(1));
+        assert_eq!(app.entry_scroll_offset, 4);
+    }
+
+    #[test]
+    fn scroll_up_moves_to_previous_after_reaching_top_of_entry() {
+        let mut app = make_test_app();
+        app.logs_state.select(Some(1));
+        app.selected_entry_line_count = 30;
+        app.timeline_viewport_height = 10;
+        app.entry_scroll_offset = 0; // Already at top
+
+        app.scroll_up();
+
+        // Should move to previous entry
+        assert_eq!(app.logs_state.selected(), Some(0));
+        assert!(app.entry_scroll_to_bottom); // Should position at bottom
+    }
+
+    #[test]
+    fn scroll_to_top_resets_entry_scroll_offset() {
+        let mut app = make_test_app();
+        app.logs_state.select(Some(1));
+        app.entry_scroll_offset = 10;
+
+        app.scroll_to_top();
+
+        assert_eq!(app.logs_state.selected(), Some(0));
+        assert_eq!(app.entry_scroll_offset, 0);
+    }
+
+    #[test]
+    fn scroll_to_bottom_resets_entry_scroll_offset() {
+        let mut app = make_test_app();
+        app.logs_state.select(Some(0));
+        app.entry_scroll_offset = 10;
+
+        app.scroll_to_bottom();
+
+        assert_eq!(app.logs_state.selected(), Some(1));
+        assert_eq!(app.entry_scroll_offset, 0);
+    }
 }
