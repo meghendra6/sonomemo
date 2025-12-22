@@ -9,8 +9,7 @@ use ratatui::{
 
 use crate::app::{App, PLACEHOLDER_COMPOSE};
 use crate::models::{
-    InputMode, NavigateFocus, is_heading_timestamp_line, is_timestamped_line,
-    split_timestamp_line,
+    InputMode, NavigateFocus, is_heading_timestamp_line, is_timestamped_line, split_timestamp_line,
 };
 use ratatui::style::Stylize;
 use regex::Regex;
@@ -24,9 +23,9 @@ pub mod theme;
 
 use components::{centered_column, parse_markdown_spans, wrap_markdown_line};
 use popups::{
-    render_activity_popup, render_help_popup, render_mood_popup, render_path_popup,
-    render_delete_entry_popup, render_discard_popup, render_pomodoro_popup,
-    render_siren_popup, render_tag_popup, render_theme_switcher_popup, render_todo_popup,
+    render_activity_popup, render_delete_entry_popup, render_discard_popup, render_help_popup,
+    render_mood_popup, render_path_popup, render_pomodoro_popup, render_siren_popup,
+    render_tag_popup, render_theme_switcher_popup, render_todo_popup,
 };
 
 pub fn ui(f: &mut Frame, app: &mut App) {
@@ -42,7 +41,11 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         InputMode::Search => {
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([Constraint::Min(1), Constraint::Length(5), Constraint::Length(1)])
+                .constraints([
+                    Constraint::Min(1),
+                    Constraint::Length(5),
+                    Constraint::Length(1),
+                ])
                 .split(f.area());
             (chunks[0], Some(chunks[1]), chunks[2])
         }
@@ -101,444 +104,538 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         let visible_start = app.timeline_ui_state.offset();
         let visible_end = visible_start.saturating_add(timeline_inner.height as usize);
 
-    // Track current date for separator rendering and maintain index mapping
-    let mut last_date: Option<String> = None;
-    let mut items_with_separators: Vec<ListItem> = Vec::new();
-    let mut ui_to_log_index: Vec<Option<usize>> = Vec::new(); // Maps UI index to actual log index
-    let mut ui_index: usize = 0;
+        // Track current date for separator rendering and maintain index mapping
+        let mut last_date: Option<String> = None;
+        let mut items_with_separators: Vec<ListItem> = Vec::new();
+        let mut ui_to_log_index: Vec<Option<usize>> = Vec::new(); // Maps UI index to actual log index
+        let mut entry_line_counts: Vec<usize> = Vec::new(); // Track line count for each log entry
+        let mut tall_entry_lines: Option<Vec<Line<'static>>> = None; // Lines for tall selected entry
+        let mut ui_index: usize = 0;
+        let selected_log_idx = app.logs_state.selected();
+        let viewport_height = timeline_inner.height as usize;
 
-    for (log_idx, entry) in app.logs.iter().enumerate() {
-        let entry_date = file_date(&entry.file_path);
+        for (log_idx, entry) in app.logs.iter().enumerate() {
+            let entry_date = file_date(&entry.file_path);
 
-        // Insert date separator if date changed (only for non-search view)
-        if !app.is_search_result {
-            if let Some(ref current_date) = entry_date {
-                if last_date.as_ref() != Some(current_date) {
-                    let separator_line = Line::from(vec![
-                        Span::styled(
-                            "─".repeat(list_area_width.saturating_sub(current_date.len() + 2)),
-                            Style::default().fg(tokens.ui_muted),
-                        ),
-                        Span::styled(
-                            format!(" {} ", current_date),
-                            Style::default()
-                                .fg(tokens.ui_accent)
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                    ]);
-                    items_with_separators.push(ListItem::new(separator_line));
-                    ui_to_log_index.push(None); // Separator has no corresponding log entry
-                    last_date = Some(current_date.clone());
-                    ui_index += 1;
+            // Insert date separator if date changed (only for non-search view)
+            if !app.is_search_result {
+                if let Some(ref current_date) = entry_date {
+                    if last_date.as_ref() != Some(current_date) {
+                        let separator_line = Line::from(vec![
+                            Span::styled(
+                                "─".repeat(list_area_width.saturating_sub(current_date.len() + 2)),
+                                Style::default().fg(tokens.ui_muted),
+                            ),
+                            Span::styled(
+                                format!(" {} ", current_date),
+                                Style::default()
+                                    .fg(tokens.ui_accent)
+                                    .add_modifier(Modifier::BOLD),
+                            ),
+                        ]);
+                        items_with_separators.push(ListItem::new(separator_line));
+                        ui_to_log_index.push(None); // Separator has no corresponding log entry
+                        last_date = Some(current_date.clone());
+                        ui_index += 1;
+                    }
                 }
             }
-        }
 
-        // Render the actual entry
-        let mut lines: Vec<Line<'static>> = Vec::new();
-        let mut in_code_block = false;
+            // Render the actual entry
+            let mut lines: Vec<Line<'static>> = Vec::new();
+            let mut in_code_block = false;
 
-        let date_prefix = if app.is_search_result {
-            file_date(&entry.file_path)
-        } else {
-            None
-        };
-        let date_width: usize = if date_prefix.is_some() { 11 } else { 0 }; // "YYYY-MM-DD "
-        let blank_date = " ".repeat(date_width);
+            let date_prefix = if app.is_search_result {
+                file_date(&entry.file_path)
+            } else {
+                None
+            };
+            let date_width: usize = if date_prefix.is_some() { 11 } else { 0 }; // "YYYY-MM-DD "
+            let blank_date = " ".repeat(date_width);
 
-        let first_line = entry.content.lines().next();
-        let entry_has_timestamp = first_line.is_some_and(|l| is_timestamped_line(l));
-        let heading_timestamp_prefix = first_line
-            .and_then(|l| {
-                if is_heading_timestamp_line(l) {
-                    split_timestamp_line(l).map(|(prefix, _)| prefix)
-                } else {
-                    None
+            let first_line = entry.content.lines().next();
+            let entry_has_timestamp = first_line.is_some_and(|l| is_timestamped_line(l));
+            let heading_timestamp_prefix = first_line
+                .and_then(|l| {
+                    if is_heading_timestamp_line(l) {
+                        split_timestamp_line(l).map(|(prefix, _)| prefix)
+                    } else {
+                        None
+                    }
+                })
+                .map(|prefix| prefix.trim_end_matches(' '));
+            let content_width = if entry_has_timestamp {
+                list_area_width
+                    .saturating_sub(date_width)
+                    .saturating_sub(timestamp_width)
+            } else {
+                list_area_width.saturating_sub(date_width)
+            };
+
+            let highlight_here = if ui_index >= visible_start && ui_index < visible_end {
+                search_regex.as_ref()
+            } else {
+                None
+            };
+
+            let first_body_index = if heading_timestamp_prefix.is_some() {
+                1
+            } else {
+                0
+            };
+
+            for (line_idx, raw_line) in entry.content.lines().enumerate() {
+                if heading_timestamp_prefix.is_some() && line_idx == 0 {
+                    continue;
                 }
-            })
-            .map(|prefix| prefix.trim_end_matches(' '));
-        let content_width = if entry_has_timestamp {
-            list_area_width
-                .saturating_sub(date_width)
-                .saturating_sub(timestamp_width)
-        } else {
-            list_area_width.saturating_sub(date_width)
-        };
 
-        let highlight_here = if ui_index >= visible_start && ui_index < visible_end {
-            search_regex.as_ref()
-        } else {
-            None
-        };
-
-        let first_body_index = if heading_timestamp_prefix.is_some() { 1 } else { 0 };
-
-        for (line_idx, raw_line) in entry.content.lines().enumerate() {
-            if heading_timestamp_prefix.is_some() && line_idx == 0 {
-                continue;
-            }
-
-            let (ts_prefix, content_line) =
-                if entry_has_timestamp && line_idx == first_body_index {
-                    if let Some(prefix) = heading_timestamp_prefix {
-                        (prefix, raw_line)
-                    } else if let Some((prefix, rest)) = split_timestamp_line(raw_line) {
-                        (prefix, rest)
+                let (ts_prefix, content_line) =
+                    if entry_has_timestamp && line_idx == first_body_index {
+                        if let Some(prefix) = heading_timestamp_prefix {
+                            (prefix, raw_line)
+                        } else if let Some((prefix, rest)) = split_timestamp_line(raw_line) {
+                            (prefix, rest)
+                        } else {
+                            ("", raw_line)
+                        }
                     } else {
                         ("", raw_line)
+                    };
+
+                let is_fence = content_line.trim_start().starts_with("```");
+                let line_in_code_block = in_code_block || is_fence;
+
+                let wrapped = wrap_markdown_line(content_line, content_width);
+                for (wrap_idx, wline) in wrapped.iter().enumerate() {
+                    let mut spans = Vec::new();
+
+                    if date_width > 0 {
+                        let date_span = if line_idx == first_body_index && wrap_idx == 0 {
+                            let date = date_prefix.clone().unwrap_or_default();
+                            Span::styled(
+                                format!("{date} "),
+                                Style::default()
+                                    .fg(tokens.ui_muted)
+                                    .add_modifier(Modifier::BOLD),
+                            )
+                        } else {
+                            Span::raw(blank_date.clone())
+                        };
+                        spans.push(date_span);
                     }
-                } else {
-                    ("", raw_line)
-                };
 
-            let is_fence = content_line.trim_start().starts_with("```");
-            let line_in_code_block = in_code_block || is_fence;
+                    if entry_has_timestamp {
+                        let ts_span = if line_idx == first_body_index && wrap_idx == 0 {
+                            let mut ts_text = ts_prefix.to_string();
+                            if !ts_text.is_empty() && !ts_text.ends_with(' ') {
+                                ts_text.push(' ');
+                            }
+                            Span::styled(ts_text, Style::default().fg(timestamp_color))
+                        } else {
+                            Span::raw(blank_timestamp.clone())
+                        };
+                        spans.push(ts_span);
+                    }
 
-            let wrapped = wrap_markdown_line(content_line, content_width);
-            for (wrap_idx, wline) in wrapped.iter().enumerate() {
-                let mut spans = Vec::new();
-
-                if date_width > 0 {
-                    let date_span = if line_idx == first_body_index && wrap_idx == 0 {
-                        let date = date_prefix.clone().unwrap_or_default();
-                        Span::styled(
-                            format!("{date} "),
-                            Style::default()
-                                .fg(tokens.ui_muted)
-                                .add_modifier(Modifier::BOLD),
-                        )
-                    } else {
-                        Span::raw(blank_date.clone())
-                    };
-                    spans.push(date_span);
+                    spans.extend(parse_markdown_spans(
+                        wline,
+                        &app.config.theme,
+                        line_in_code_block,
+                        highlight_here,
+                        search_style,
+                    ));
+                    lines.push(Line::from(spans));
                 }
 
-                if entry_has_timestamp {
-                    let ts_span = if line_idx == first_body_index && wrap_idx == 0 {
-                        let mut ts_text = ts_prefix.to_string();
-                        if !ts_text.is_empty() && !ts_text.ends_with(' ') {
-                            ts_text.push(' ');
-                        }
-                        Span::styled(ts_text, Style::default().fg(timestamp_color))
-                    } else {
-                        Span::raw(blank_timestamp.clone())
-                    };
-                    spans.push(ts_span);
+                if is_fence {
+                    in_code_block = !in_code_block;
                 }
-
-                spans.extend(parse_markdown_spans(
-                    wline,
-                    &app.config.theme,
-                    line_in_code_block,
-                    highlight_here,
-                    search_style,
-                ));
-                lines.push(Line::from(spans));
             }
 
-            if is_fence {
-                in_code_block = !in_code_block;
+            // Track line count for this entry
+            let total_lines = lines.len();
+            entry_line_counts.push(total_lines);
+
+            // For tall selected entries, we'll handle them specially below
+            let is_selected = selected_log_idx == Some(log_idx);
+            let is_tall = total_lines > viewport_height && viewport_height > 0;
+
+            // Store lines for tall selected entry (for Paragraph rendering)
+            if is_selected && is_tall {
+                tall_entry_lines = Some(lines.clone());
             }
+
+            items_with_separators.push(ListItem::new(Text::from(lines)));
+            ui_to_log_index.push(Some(log_idx)); // This UI item corresponds to log_idx
+
+            ui_index += 1;
         }
-        items_with_separators.push(ListItem::new(Text::from(lines)));
-        ui_to_log_index.push(Some(log_idx)); // This UI item corresponds to log_idx
-        ui_index += 1;
-    }
 
-    let list_items = items_with_separators;
+        // Store the line count of the selected entry for navigation logic
+        let selected_entry_line_count = selected_log_idx
+            .and_then(|idx| entry_line_counts.get(idx).copied())
+            .unwrap_or(0);
+        app.selected_entry_line_count = selected_entry_line_count;
+        app.timeline_viewport_height = viewport_height;
 
-    // Convert selected log index to UI index for rendering
-    let ui_selected_index = if let Some(selected_log_idx) = app.logs_state.selected() {
-        ui_to_log_index
-            .iter()
-            .position(|&log_idx| log_idx == Some(selected_log_idx))
-    } else {
-        None
-    };
+        // Calculate whether selected entry is tall (needs special rendering)
+        let selected_entry_is_tall =
+            selected_entry_line_count > viewport_height && viewport_height > 0;
 
-    let is_timeline_focused =
-        app.input_mode == InputMode::Navigate && app.navigate_focus == NavigateFocus::Timeline;
-    let is_tasks_focused =
-        app.input_mode == InputMode::Navigate && app.navigate_focus == NavigateFocus::Tasks;
+        // Handle scroll-to-bottom: update scroll offset and clear the flag
+        if app.entry_scroll_to_bottom && selected_entry_is_tall {
+            app.entry_scroll_offset = selected_entry_line_count.saturating_sub(viewport_height);
+            app.entry_scroll_to_bottom = false;
+        } else if app.entry_scroll_to_bottom {
+            app.entry_scroll_to_bottom = false;
+        }
 
-    // Collect status information (used in both search and normal mode)
-    let focus_info = if let Some(selected_idx) = app.logs_state.selected() {
-        if let Some(entry) = app.logs.get(selected_idx) {
-            let date = file_date(&entry.file_path).unwrap_or_else(|| "N/A".to_string());
-            let time_info = entry
-                .content
-                .lines()
-                .next()
-                .and_then(|line| split_timestamp_line(line).map(|(prefix, _)| &prefix[1..9]))
-                .unwrap_or("--:--:--");
-            format!("📅 {} {}", date, time_info)
+        // Clamp scroll offset to valid range
+        if selected_entry_is_tall {
+            let max_offset = selected_entry_line_count.saturating_sub(viewport_height);
+            app.entry_scroll_offset = app.entry_scroll_offset.min(max_offset);
+        } else {
+            app.entry_scroll_offset = 0;
+        }
+
+        let list_items = items_with_separators;
+
+        // Convert selected log index to UI index for rendering
+        let ui_selected_index = if let Some(selected_log_idx) = app.logs_state.selected() {
+            ui_to_log_index
+                .iter()
+                .position(|&log_idx| log_idx == Some(selected_log_idx))
+        } else {
+            None
+        };
+
+        let is_timeline_focused =
+            app.input_mode == InputMode::Navigate && app.navigate_focus == NavigateFocus::Timeline;
+        let is_tasks_focused =
+            app.input_mode == InputMode::Navigate && app.navigate_focus == NavigateFocus::Tasks;
+
+        // Collect status information (used in both search and normal mode)
+        let focus_info = if let Some(selected_idx) = app.logs_state.selected() {
+            if let Some(entry) = app.logs.get(selected_idx) {
+                let date = file_date(&entry.file_path).unwrap_or_else(|| "N/A".to_string());
+                let time_info = entry
+                    .content
+                    .lines()
+                    .next()
+                    .and_then(|line| split_timestamp_line(line).map(|(prefix, _)| &prefix[1..9]))
+                    .unwrap_or("--:--:--");
+                format!("📅 {} {}", date, time_info)
+            } else {
+                "📅 N/A".to_string()
+            }
         } else {
             "📅 N/A".to_string()
-        }
-    } else {
-        "📅 N/A".to_string()
-    };
+        };
 
-    let task_summary = if app.tasks.is_empty() {
-        "Tasks 0".to_string()
-    } else {
-        format!("Tasks {} ({}✓)", app.tasks.len(), app.today_done_tasks)
-    };
+        let task_summary = if app.tasks.is_empty() {
+            "Tasks 0".to_string()
+        } else {
+            format!("Tasks {} ({}✓)", app.tasks.len(), app.today_done_tasks)
+        };
 
-    let stats_summary = format!(
-        "{} · {} · 🍅 {}",
-        focus_info, task_summary, app.today_tomatoes
-    );
+        let stats_summary = format!(
+            "{} · {} · 🍅 {}",
+            focus_info, task_summary, app.today_tomatoes
+        );
 
-    let pomodoro = if let Some(end_time) = app.pomodoro_end {
-        let now = Local::now();
-        if now < end_time {
-            let remaining = end_time - now;
-            let total_secs = remaining.num_seconds();
-            let mins = remaining.num_minutes();
-            let secs = total_secs % 60;
+        let pomodoro = if let Some(end_time) = app.pomodoro_end {
+            let now = Local::now();
+            if now < end_time {
+                let remaining = end_time - now;
+                let total_secs = remaining.num_seconds();
+                let mins = remaining.num_minutes();
+                let secs = total_secs % 60;
 
-            let target = match app.pomodoro_target.as_ref() {
-                Some(crate::models::PomodoroTarget::Task { text, .. }) => {
-                    format!(" {}", truncate(text, 20))
-                }
-                _ => "".to_string(),
-            };
+                let target = match app.pomodoro_target.as_ref() {
+                    Some(crate::models::PomodoroTarget::Task { text, .. }) => {
+                        format!(" {}", truncate(text, 20))
+                    }
+                    _ => "".to_string(),
+                };
 
-            let elapsed_ratio = if let Some(start) = app.pomodoro_start {
-                let total_duration = (end_time - start).num_seconds() as f32;
-                let elapsed = (now - start).num_seconds() as f32;
-                (elapsed / total_duration).min(1.0)
+                let elapsed_ratio = if let Some(start) = app.pomodoro_start {
+                    let total_duration = (end_time - start).num_seconds() as f32;
+                    let elapsed = (now - start).num_seconds() as f32;
+                    (elapsed / total_duration).min(1.0)
+                } else {
+                    0.0
+                };
+                let bar_width = 10;
+                let filled = (elapsed_ratio * bar_width as f32) as usize;
+                let empty = bar_width - filled;
+                let progress_bar = format!("{}{}", "█".repeat(filled), "░".repeat(empty));
+
+                let urgency = if mins < 1 {
+                    "🔴"
+                } else if mins < 5 {
+                    "🟡"
+                } else {
+                    "🟢"
+                };
+
+                format!(
+                    " [{} 🍅 {:02}:{:02} {}{}]",
+                    urgency, mins, secs, progress_bar, target
+                )
             } else {
-                0.0
-            };
-            let bar_width = 10;
-            let filled = (elapsed_ratio * bar_width as f32) as usize;
-            let empty = bar_width - filled;
-            let progress_bar = format!("{}{}", "█".repeat(filled), "░".repeat(empty));
-
-            let urgency = if mins < 1 {
-                "🔴"
-            } else if mins < 5 {
-                "🟡"
-            } else {
-                "🟢"
-            };
-
-            format!(
-                " [{} 🍅 {:02}:{:02} {}{}]",
-                urgency, mins, secs, progress_bar, target
-            )
+                String::new()
+            }
         } else {
             String::new()
-        }
-    } else {
-        String::new()
-    };
+        };
 
-    let summary = if app.is_search_result {
-        let mut parts = Vec::new();
-        parts.push(format!("{} results", app.logs.len()));
-        if let Some(query) = app.last_search_query.as_deref() {
-            if !query.trim().is_empty() {
-                parts.push(format!("\"{}\"", query.trim()));
+        let summary = if app.is_search_result {
+            let mut parts = Vec::new();
+            parts.push(format!("{} results", app.logs.len()));
+            if let Some(query) = app.last_search_query.as_deref() {
+                if !query.trim().is_empty() {
+                    parts.push(format!("\"{}\"", query.trim()));
+                }
             }
-        }
-        if let Some(selected) = app.logs_state.selected() {
-            if !app.logs.is_empty() {
-                parts.push(format!("Sel {}/{}", selected + 1, app.logs.len()));
+            if let Some(selected) = app.logs_state.selected() {
+                if !app.logs.is_empty() {
+                    parts.push(format!("Sel {}/{}", selected + 1, app.logs.len()));
+                }
             }
+            parts.push(stats_summary.clone());
+            parts.join(" · ")
+        } else {
+            let time = Local::now().format("%Y-%m-%d %H:%M");
+            let base = format!("{} · Entries {} · {}", time, app.logs.len(), stats_summary);
+            format!("{base}{pomodoro}")
+        };
+
+        let title_label = if app.is_search_result {
+            "SEARCH"
+        } else {
+            "TIMELINE"
+        };
+
+        // Add scroll indicator for tall entries
+        let scroll_indicator = if selected_entry_line_count > viewport_height && viewport_height > 0
+        {
+            let max_offset = selected_entry_line_count.saturating_sub(viewport_height);
+            let can_scroll_up = app.entry_scroll_offset > 0;
+            let can_scroll_down = app.entry_scroll_offset < max_offset;
+            match (can_scroll_up, can_scroll_down) {
+                (true, true) => " ↕",
+                (true, false) => " ↑",
+                (false, true) => " ↓",
+                (false, false) => "",
+            }
+        } else {
+            ""
+        };
+
+        let timeline_title_text = format!("{title_label}{scroll_indicator} — {summary}");
+        let timeline_title = truncate(
+            &timeline_title_text,
+            timeline_area.width.saturating_sub(4) as usize,
+        );
+        let timeline_border_color = if is_timeline_focused {
+            tokens.ui_accent
+        } else {
+            tokens.ui_border_default
+        };
+        let timeline_title_style = if is_timeline_focused {
+            Style::default()
+                .fg(tokens.ui_accent)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(tokens.ui_muted)
+        };
+        let timeline_block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(timeline_border_color))
+            .title(Line::from(Span::styled(
+                timeline_title,
+                timeline_title_style,
+            )));
+
+        let highlight_bg = tokens.ui_selection_bg;
+        let logs_highlight_style = if is_timeline_focused {
+            Style::default()
+                .bg(highlight_bg)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().bg(highlight_bg)
+        };
+
+        // When the selected entry is tall (taller than viewport), render it as a Paragraph
+        // with scroll support instead of using List (which doesn't handle tall items well)
+        if selected_entry_is_tall {
+            if let Some(lines) = tall_entry_lines {
+                // Render the tall selected entry as a Paragraph with scroll
+                let selected_text = Text::from(lines);
+                let scroll_offset = app.entry_scroll_offset as u16;
+
+                let paragraph = Paragraph::new(selected_text)
+                    .block(timeline_block)
+                    .scroll((scroll_offset, 0))
+                    .style(logs_highlight_style);
+
+                f.render_widget(paragraph, timeline_area);
+            } else {
+                // Fallback to list rendering
+                let logs_list = List::new(list_items)
+                    .block(timeline_block)
+                    .highlight_symbol("")
+                    .highlight_style(logs_highlight_style);
+                app.timeline_ui_state.select(ui_selected_index);
+                f.render_stateful_widget(logs_list, timeline_area, &mut app.timeline_ui_state);
+            }
+        } else {
+            // Normal list rendering for non-tall entries
+            let logs_list = List::new(list_items)
+                .block(timeline_block)
+                .highlight_symbol("")
+                .highlight_style(logs_highlight_style);
+            app.timeline_ui_state.select(ui_selected_index);
+            f.render_stateful_widget(logs_list, timeline_area, &mut app.timeline_ui_state);
         }
-        parts.push(stats_summary.clone());
-        parts.join(" · ")
-    } else {
-        let time = Local::now().format("%Y-%m-%d %H:%M");
-        let base = format!("{} · Entries {} · {}", time, app.logs.len(), stats_summary);
-        format!("{base}{pomodoro}")
-    };
 
-    let title_label = if app.is_search_result {
-        "SEARCH"
-    } else {
-        "TIMELINE"
-    };
-    let timeline_title_text = format!("{title_label} — {summary}");
-    let timeline_title = truncate(
-        &timeline_title_text,
-        timeline_area.width.saturating_sub(4) as usize,
-    );
-    let timeline_border_color = if is_timeline_focused {
-        tokens.ui_accent
-    } else {
-        tokens.ui_border_default
-    };
-    let timeline_title_style = if is_timeline_focused {
-        Style::default()
-            .fg(tokens.ui_accent)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(tokens.ui_muted)
-    };
-    let timeline_block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(timeline_border_color))
-        .title(Line::from(Span::styled(timeline_title, timeline_title_style)));
+        // Right panel: Today's tasks
+        let tasks_inner = Block::default().borders(Borders::ALL).inner(tasks_area);
+        let todo_area_width = tasks_inner.width.saturating_sub(1).max(1) as usize;
 
-    let highlight_bg = tokens.ui_selection_bg;
-    let logs_highlight_style = if is_timeline_focused {
-        Style::default()
-            .bg(highlight_bg)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().bg(highlight_bg)
-    };
+        let todos: Vec<ListItem> = app
+            .tasks
+            .iter()
+            .map(|task| {
+                let mut line = String::new();
+                line.push_str(&"  ".repeat(task.indent));
+                line.push_str("- [ ] ");
+                line.push_str(&task.text);
 
-    let logs_list = List::new(list_items)
-        .block(timeline_block)
-        .highlight_symbol("")
-        .highlight_style(logs_highlight_style);
+                let is_active_pomodoro = if let (
+                    Some(end_time),
+                    Some(crate::models::PomodoroTarget::Task {
+                        file_path,
+                        line_number,
+                        ..
+                    }),
+                ) = (app.pomodoro_end, app.pomodoro_target.as_ref())
+                {
+                    if *file_path == task.file_path && *line_number == task.line_number {
+                        let now = Local::now();
+                        if now < end_time {
+                            let remaining = end_time - now;
+                            let mins = remaining.num_minutes();
+                            let secs = remaining.num_seconds() % 60;
 
-    // Persist list offset across frames to avoid "cursor pinned" scroll behavior.
-    app.timeline_ui_state.select(ui_selected_index);
-    f.render_stateful_widget(logs_list, timeline_area, &mut app.timeline_ui_state);
+                            // Urgency indicator
+                            let urgency = if mins < 1 {
+                                "🔴"
+                            } else if mins < 5 {
+                                "🟡"
+                            } else {
+                                "🟢"
+                            };
 
-    // Right panel: Today's tasks
-    let tasks_inner = Block::default().borders(Borders::ALL).inner(tasks_area);
-    let todo_area_width = tasks_inner.width.saturating_sub(1).max(1) as usize;
+                            // Progress bar for the task: calculate based on actual duration
+                            let elapsed_ratio = if let Some(start) = app.pomodoro_start {
+                                let total_duration = (end_time - start).num_seconds() as f32;
+                                let elapsed = (now - start).num_seconds() as f32;
+                                (elapsed / total_duration).min(1.0)
+                            } else {
+                                0.0
+                            };
+                            let bar_width = 8;
+                            let filled = (elapsed_ratio * bar_width as f32) as usize;
+                            let empty = bar_width - filled;
+                            let progress = format!("{}{}", "▓".repeat(filled), "░".repeat(empty));
 
-    let todos: Vec<ListItem> = app
-        .tasks
-        .iter()
-        .map(|task| {
-            let mut line = String::new();
-            line.push_str(&"  ".repeat(task.indent));
-            line.push_str("- [ ] ");
-            line.push_str(&task.text);
-
-            let is_active_pomodoro = if let (
-                Some(end_time),
-                Some(crate::models::PomodoroTarget::Task {
-                    file_path,
-                    line_number,
-                    ..
-                }),
-            ) = (app.pomodoro_end, app.pomodoro_target.as_ref())
-            {
-                if *file_path == task.file_path && *line_number == task.line_number {
-                    let now = Local::now();
-                    if now < end_time {
-                        let remaining = end_time - now;
-                        let mins = remaining.num_minutes();
-                        let secs = remaining.num_seconds() % 60;
-
-                        // Urgency indicator
-                        let urgency = if mins < 1 {
-                            "🔴"
-                        } else if mins < 5 {
-                            "🟡"
+                            line.push_str(&format!(
+                                " {} {:02}:{:02} {}",
+                                urgency, mins, secs, progress
+                            ));
+                            true
                         } else {
-                            "🟢"
-                        };
-
-                        // Progress bar for the task: calculate based on actual duration
-                        let elapsed_ratio = if let Some(start) = app.pomodoro_start {
-                            let total_duration = (end_time - start).num_seconds() as f32;
-                            let elapsed = (now - start).num_seconds() as f32;
-                            (elapsed / total_duration).min(1.0)
-                        } else {
-                            0.0
-                        };
-                        let bar_width = 8;
-                        let filled = (elapsed_ratio * bar_width as f32) as usize;
-                        let empty = bar_width - filled;
-                        let progress = format!("{}{}", "▓".repeat(filled), "░".repeat(empty));
-
-                        line.push_str(&format!(
-                            " {} {:02}:{:02} {}",
-                            urgency, mins, secs, progress
-                        ));
-                        true
+                            false
+                        }
                     } else {
                         false
                     }
                 } else {
                     false
+                };
+
+                if task.tomato_count > 0 && !is_active_pomodoro {
+                    if task.tomato_count <= 3 {
+                        line.push(' ');
+                        line.push_str(&"🍅".repeat(task.tomato_count));
+                    } else {
+                        line.push_str(&format!(" 🍅×{}", task.tomato_count));
+                    }
+                } else if task.tomato_count > 0 && is_active_pomodoro {
+                    // Show tomato count after timer for active task
+                    line.push_str(&format!(" (🍅{})", task.tomato_count));
                 }
-            } else {
-                false
-            };
 
-            if task.tomato_count > 0 && !is_active_pomodoro {
-                if task.tomato_count <= 3 {
-                    line.push(' ');
-                    line.push_str(&"🍅".repeat(task.tomato_count));
-                } else {
-                    line.push_str(&format!(" 🍅×{}", task.tomato_count));
-                }
-            } else if task.tomato_count > 0 && is_active_pomodoro {
-                // Show tomato count after timer for active task
-                line.push_str(&format!(" (🍅{})", task.tomato_count));
-            }
+                let wrapped = wrap_markdown_line(&line, todo_area_width);
+                let lines: Vec<Line<'static>> = wrapped
+                    .iter()
+                    .map(|l| {
+                        Line::from(parse_markdown_spans(
+                            l,
+                            &app.config.theme,
+                            false,
+                            None,
+                            Style::default(),
+                        ))
+                    })
+                    .collect();
+                ListItem::new(Text::from(lines))
+            })
+            .collect();
 
-            let wrapped = wrap_markdown_line(&line, todo_area_width);
-            let lines: Vec<Line<'static>> = wrapped
-                .iter()
-                .map(|l| {
-                    Line::from(parse_markdown_spans(
-                        l,
-                        &app.config.theme,
-                        false,
-                        None,
-                        Style::default(),
-                    ))
-                })
-                .collect();
-            ListItem::new(Text::from(lines))
-        })
-        .collect();
+        let tasks_summary = format!(
+            "Open {} · Done {} · 🍅 {}",
+            app.tasks.len(),
+            app.today_done_tasks,
+            app.today_tomatoes
+        );
+        let tasks_title_text = format!("TASKS — {tasks_summary}");
+        let tasks_title = truncate(
+            &tasks_title_text,
+            tasks_area.width.saturating_sub(4) as usize,
+        );
+        let tasks_border_color = if is_tasks_focused {
+            tokens.ui_accent
+        } else {
+            tokens.ui_border_default
+        };
+        let tasks_title_style = if is_tasks_focused {
+            Style::default()
+                .fg(tokens.ui_accent)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(tokens.ui_muted)
+        };
+        let tasks_block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(tasks_border_color))
+            .title(Line::from(Span::styled(tasks_title, tasks_title_style)));
 
-    let tasks_summary = format!(
-        "Open {} · Done {} · 🍅 {}",
-        app.tasks.len(),
-        app.today_done_tasks,
-        app.today_tomatoes
-    );
-    let tasks_title_text = format!("TASKS — {tasks_summary}");
-    let tasks_title = truncate(
-        &tasks_title_text,
-        tasks_area.width.saturating_sub(4) as usize,
-    );
-    let tasks_border_color = if is_tasks_focused {
-        tokens.ui_accent
-    } else {
-        tokens.ui_border_default
-    };
-    let tasks_title_style = if is_tasks_focused {
-        Style::default()
-            .fg(tokens.ui_accent)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(tokens.ui_muted)
-    };
-    let tasks_block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(tasks_border_color))
-        .title(Line::from(Span::styled(tasks_title, tasks_title_style)));
+        let highlight_bg = tokens.ui_selection_bg;
+        let todo_highlight_style = if is_tasks_focused {
+            Style::default()
+                .bg(highlight_bg)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().bg(highlight_bg)
+        };
 
-    let highlight_bg = tokens.ui_selection_bg;
-    let todo_highlight_style = if is_tasks_focused {
-        Style::default()
-            .bg(highlight_bg)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().bg(highlight_bg)
-    };
-
-    let todo_list = List::new(todos)
-        .block(tasks_block)
-        .highlight_symbol("")
-        .highlight_style(todo_highlight_style);
-    f.render_stateful_widget(todo_list, tasks_area, &mut app.tasks_state);
+        let todo_list = List::new(todos)
+            .block(tasks_block)
+            .highlight_symbol("")
+            .highlight_style(todo_highlight_style);
+        f.render_stateful_widget(todo_list, tasks_area, &mut app.tasks_state);
     }
 
     match app.input_mode {
@@ -663,14 +760,14 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                 let row_in_view = cursor_row_u16.saturating_sub(app.textarea_viewport_row);
                 let row_in_view = row_in_view.min(inner.height.saturating_sub(1));
 
-            let prefix_width = compose_prefix_width(app.config.ui.line_numbers);
-            let col_in_view = (visual_col.min(u16::MAX as usize)) as u16;
-            let col_in_view = col_in_view.saturating_add(prefix_width);
-            let col_in_view = col_in_view.min(inner.width.saturating_sub(1));
+                let prefix_width = compose_prefix_width(app.config.ui.line_numbers);
+                let col_in_view = (visual_col.min(u16::MAX as usize)) as u16;
+                let col_in_view = col_in_view.saturating_add(prefix_width);
+                let col_in_view = col_in_view.min(inner.width.saturating_sub(1));
 
-            f.set_cursor_position((inner.x + col_in_view, inner.y + row_in_view));
+                f.set_cursor_position((inner.x + col_in_view, inner.y + row_in_view));
+            }
         }
-    }
     }
 
     render_status_bar(f, status_area, app, &tokens);
@@ -790,10 +887,7 @@ fn compose_prefix_spans(
     let mut spans: Vec<Span<'static>> = Vec::new();
     if show_line_numbers {
         let label = format!("{:>width$} ", line_number + 1, width = LINE_NUMBER_WIDTH);
-        spans.push(Span::styled(
-            label,
-            Style::default().fg(tokens.ui_muted),
-        ));
+        spans.push(Span::styled(label, Style::default().fg(tokens.ui_muted)));
     }
     spans.push(Span::styled(
         LINE_MARKER,
@@ -996,8 +1090,8 @@ fn file_date(file_path: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::compose_render_line;
     use super::compose_prefix_width;
+    use super::compose_render_line;
     use crate::config::Theme;
     use crate::ui::theme::ThemeTokens;
 
