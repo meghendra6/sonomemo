@@ -155,14 +155,12 @@ impl<'a> App<'a> {
             // Check for unfinished tasks from previous day to carry over
             let already_checked =
                 storage::is_carryover_done(&config.data.log_path).unwrap_or(false);
-            if !already_checked {
-                if let Ok(todos) = storage::get_last_file_pending_todos(&config.data.log_path) {
-                    if !todos.is_empty() {
+            if !already_checked
+                && let Ok(todos) = storage::get_last_file_pending_todos(&config.data.log_path)
+                    && !todos.is_empty() {
                         pending_todos = todos;
                         show_todo_popup = true;
                     }
-                }
-            }
         }
 
         let input_mode = InputMode::Navigate;
@@ -280,11 +278,11 @@ impl<'a> App<'a> {
                 if !self.logs.is_empty() {
                     // Try to preserve the previous selection position
                     let new_selection = preserve_selection
-                        .and_then(|i| {
+                        .map(|i| {
                             if i < self.logs.len() {
-                                Some(i)
+                                i
                             } else {
-                                Some(self.logs.len() - 1)
+                                self.logs.len() - 1
                             }
                         })
                         .or(Some(self.logs.len() - 1));

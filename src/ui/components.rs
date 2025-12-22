@@ -442,7 +442,7 @@ fn normalize_leading_whitespace(text: &str) -> (String, &str) {
     let out = if is_list {
         // Quantize indentation into list nesting levels (2 spaces per level).
         // This avoids "indentation by arbitrary spaces" and makes depth feel consistent.
-        let level = (spaces + 1) / 2;
+        let level = spaces.div_ceil(2);
         "  ".repeat(level)
     } else {
         " ".repeat(spaces)
