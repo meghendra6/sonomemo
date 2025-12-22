@@ -88,11 +88,10 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::Result<
                 }
             }
 
-            if let Event::Key(key) = event {
-                if key.kind == KeyEventKind::Press {
+            if let Event::Key(key) = event
+                && key.kind == KeyEventKind::Press {
                     handle_key_input(app, key);
                 }
-            }
         }
 
         if app.should_quit {
@@ -104,8 +103,8 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::Result<
 fn check_timers(app: &mut App) {
     handle_day_rollover(app);
 
-    if let Some(end_time) = app.pomodoro_end {
-        if Local::now() >= end_time {
+    if let Some(end_time) = app.pomodoro_end
+        && Local::now() >= end_time {
             app.pomodoro_end = None;
             app.pomodoro_start = None;
 
@@ -126,21 +125,18 @@ fn check_timers(app: &mut App) {
             let alert_seconds = app.config.pomodoro.alert_seconds.max(1) as i64;
             app.pomodoro_alert_expiry = Some(Local::now() + Duration::seconds(alert_seconds));
         }
-    }
 
-    if let Some(expiry) = app.pomodoro_alert_expiry {
-        if Local::now() >= expiry {
+    if let Some(expiry) = app.pomodoro_alert_expiry
+        && Local::now() >= expiry {
             app.pomodoro_alert_expiry = None;
             app.pomodoro_alert_message = None;
         }
-    }
 
-    if let Some(expiry) = app.toast_expiry {
-        if Local::now() >= expiry {
+    if let Some(expiry) = app.toast_expiry
+        && Local::now() >= expiry {
             app.toast_expiry = None;
             app.toast_message = None;
         }
-    }
 }
 
 fn handle_day_rollover(app: &mut App) {
@@ -167,8 +163,8 @@ fn handle_day_rollover(app: &mut App) {
     app.last_search_query = None;
 
     let mut carried_tasks = 0usize;
-    if !storage::is_carryover_done(&app.config.data.log_path).unwrap_or(false) {
-        if let Ok(blocks) =
+    if !storage::is_carryover_done(&app.config.data.log_path).unwrap_or(false)
+        && let Ok(blocks) =
             storage::get_carryover_blocks_for_date(&app.config.data.log_path, &prev_date)
         {
             for block in blocks {
@@ -185,7 +181,6 @@ fn handle_day_rollover(app: &mut App) {
             }
             let _ = storage::mark_carryover_done(&app.config.data.log_path);
         }
-    }
 
     app.update_logs();
     if carried_tasks > 0 {
@@ -396,8 +391,8 @@ fn handle_tag_popup(app: &mut App, key: event::KeyEvent) {
         };
         app.tag_list_state.select(Some(i));
     } else if key_match(&key, &app.config.keybindings.popup.confirm) {
-        if let Some(i) = app.tag_list_state.selected() {
-            if i < app.tags.len() {
+        if let Some(i) = app.tag_list_state.selected()
+            && i < app.tags.len() {
                 let query = app.tags[i].0.clone();
                 if let Ok(results) = storage::search_entries(&app.config.data.log_path, &query) {
                     app.logs = results;
@@ -408,7 +403,6 @@ fn handle_tag_popup(app: &mut App, key: event::KeyEvent) {
                     app.logs_state.select(Some(0));
                 }
             }
-        }
         app.show_tag_popup = false;
         app.transition_to(InputMode::Navigate);
     } else if key_match(&key, &app.config.keybindings.popup.cancel) {
@@ -543,12 +537,11 @@ fn handle_normal_mode(app: &mut App, key: event::KeyEvent) {
     } else if app.navigate_focus == models::NavigateFocus::Timeline
         && key_match(&key, &app.config.keybindings.timeline.edit)
     {
-        if let Some(i) = app.logs_state.selected() {
-            if i < app.logs.len() {
+        if let Some(i) = app.logs_state.selected()
+            && i < app.logs.len() {
                 let entry = app.logs[i].clone();
                 app.start_edit_entry(&entry);
             }
-        }
     } else if key_match(&key, &app.config.keybindings.timeline.delete_entry) {
         if app.navigate_focus == models::NavigateFocus::Timeline {
             if let Some(i) = app.logs_state.selected() {
@@ -573,8 +566,8 @@ fn handle_normal_mode(app: &mut App, key: event::KeyEvent) {
     } else if app.navigate_focus == models::NavigateFocus::Tasks
         && key_match(&key, &app.config.keybindings.tasks.edit)
     {
-        if let Some(i) = app.tasks_state.selected() {
-            if i < app.tasks.len() {
+        if let Some(i) = app.tasks_state.selected()
+            && i < app.tasks.len() {
                 let task = app.tasks[i].clone();
                 if let Some(entry) = app.logs.iter().find(|e| {
                     e.file_path == task.file_path
@@ -585,7 +578,6 @@ fn handle_normal_mode(app: &mut App, key: event::KeyEvent) {
                     app.start_edit_entry(&entry);
                 }
             }
-        }
     } else if key.code == KeyCode::Esc {
         if app.is_search_result {
             app.last_search_query = None;
@@ -594,8 +586,8 @@ fn handle_normal_mode(app: &mut App, key: event::KeyEvent) {
     } else if app.navigate_focus == models::NavigateFocus::Timeline
         && key_match(&key, &app.config.keybindings.timeline.toggle_todo)
     {
-        if let Some(i) = app.logs_state.selected() {
-            if i < app.logs.len() {
+        if let Some(i) = app.logs_state.selected()
+            && i < app.logs.len() {
                 let entry = &app.logs[i];
                 if entry.content.contains("- [ ]") || entry.content.contains("- [x]") {
                     let _ = storage::toggle_todo_status(entry);
@@ -607,17 +599,15 @@ fn handle_normal_mode(app: &mut App, key: event::KeyEvent) {
                     app.logs_state.select(Some(i));
                 }
             }
-        }
     } else if app.navigate_focus == models::NavigateFocus::Tasks
         && key_match(&key, &app.config.keybindings.tasks.toggle)
     {
-        if let Some(i) = app.tasks_state.selected() {
-            if i < app.tasks.len() {
+        if let Some(i) = app.tasks_state.selected()
+            && i < app.tasks.len() {
                 let task = app.tasks[i].clone();
                 let _ = storage::toggle_task_status(&task.file_path, task.line_number);
                 app.update_logs();
             }
-        }
     } else if app.navigate_focus == models::NavigateFocus::Tasks
         && key_match(&key, &app.config.keybindings.tasks.start_pomodoro)
     {
@@ -718,7 +708,7 @@ fn handle_editing_mode(app: &mut App, key: event::KeyEvent) {
                 };
 
                 new_lines.push(format!("## [{heading_time}]"));
-                new_lines.extend(lines.into_iter());
+                new_lines.extend(lines);
             }
 
             if let Err(e) = storage::replace_entry_lines(
@@ -759,10 +749,8 @@ fn handle_editing_mode(app: &mut App, key: event::KeyEvent) {
         app.textarea = tui_textarea::TextArea::default();
         app.composer_dirty = false;
         app.transition_to(InputMode::Navigate);
-    } else {
-        if app.textarea.input(key) {
-            app.composer_dirty = true;
-        }
+    } else if app.textarea.input(key) {
+        app.composer_dirty = true;
     }
 }
 
@@ -805,8 +793,7 @@ fn open_or_toggle_pomodoro_for_selected_task(app: &mut App) {
         line_number,
         ..
     }) = app.pomodoro_target.as_ref()
-    {
-        if app.pomodoro_end.is_some()
+        && app.pomodoro_end.is_some()
             && *file_path == task.file_path
             && *line_number == task.line_number
         {
@@ -816,7 +803,6 @@ fn open_or_toggle_pomodoro_for_selected_task(app: &mut App) {
             app.toast("Pomodoro stopped.");
             return;
         }
-    }
 
     app.pomodoro_pending_task = Some(task);
     app.pomodoro_minutes_input = app.config.pomodoro.work_minutes.to_string();

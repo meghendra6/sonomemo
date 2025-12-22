@@ -116,13 +116,11 @@ pub fn get_available_log_dates(log_path: &Path) -> io::Result<Vec<NaiveDate>> {
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().and_then(|s| s.to_str()) == Some("md") {
-                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                    if let Ok(date) = NaiveDate::parse_from_str(stem, "%Y-%m-%d") {
+            if path.extension().and_then(|s| s.to_str()) == Some("md")
+                && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+                    && let Ok(date) = NaiveDate::parse_from_str(stem, "%Y-%m-%d") {
                         dates.push(date);
                     }
-                }
-            }
         }
     }
 
@@ -207,7 +205,7 @@ pub fn get_carryover_blocks_for_date(
         let (indent_bytes, indent_spaces) = parse_indent(s);
         let after_indent = &s[indent_bytes..];
         if let Some(text) = after_indent.strip_prefix("- [ ] ") {
-            let level = (indent_spaces + 1) / 2;
+            let level = indent_spaces.div_ceil(2);
             let indent = "  ".repeat(level);
 
             let (base, tomato_count) = strip_trailing_tomatoes(text);
@@ -331,7 +329,7 @@ fn parse_task_content(content: &str, path_str: &str) -> Vec<TaskItem> {
             let (text, tomato_count) = strip_trailing_tomatoes(text);
             tasks.push(TaskItem {
                 text: text.trim().to_string(),
-                indent: (indent_spaces + 1) / 2,
+                indent: indent_spaces.div_ceil(2),
                 tomato_count,
                 file_path: path_str.to_string(),
                 line_number: i,
@@ -473,11 +471,10 @@ pub fn get_last_file_pending_todos(log_path: &Path) -> io::Result<Vec<String>> {
             let path = entry.path();
             if path.extension().and_then(|s| s.to_str()) == Some("md") {
                 // Exclude today's file (only look at past days)
-                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                    if stem != today {
+                if let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+                    && stem != today {
                         file_paths.push(path);
                     }
-                }
             }
         }
         // Sort by date
@@ -512,8 +509,8 @@ pub fn get_all_tags(log_path: &Path) -> io::Result<Vec<(String, usize)>> {
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().and_then(|s| s.to_str()) == Some("md") {
-                if let Ok(content) = fs::read_to_string(&path) {
+            if path.extension().and_then(|s| s.to_str()) == Some("md")
+                && let Ok(content) = fs::read_to_string(&path) {
                     for line in content.lines() {
                         for word in line.split_whitespace() {
                             if word.starts_with('#') && word.len() > 1 {
@@ -522,7 +519,6 @@ pub fn get_all_tags(log_path: &Path) -> io::Result<Vec<(String, usize)>> {
                         }
                     }
                 }
-            }
         }
     }
 
@@ -559,9 +555,9 @@ pub fn get_activity_stats(
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().and_then(|s| s.to_str()) == Some("md") {
-                if let Some(filename) = path.file_stem().and_then(|s| s.to_str()) {
-                    if let Ok(content) = fs::read_to_string(&path) {
+            if path.extension().and_then(|s| s.to_str()) == Some("md")
+                && let Some(filename) = path.file_stem().and_then(|s| s.to_str())
+                    && let Ok(content) = fs::read_to_string(&path) {
                         let mut line_count = 0usize;
                         let mut tomato_count = 0usize;
 
@@ -589,8 +585,6 @@ pub fn get_activity_stats(
 
                         stats.insert(filename.to_string(), (line_count, tomato_count));
                     }
-                }
-            }
         }
     }
     Ok(stats)
