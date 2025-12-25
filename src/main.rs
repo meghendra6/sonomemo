@@ -18,7 +18,7 @@ mod models;
 mod storage;
 mod ui;
 
-use crate::config::{ThemePreset, config_path, key_match};
+use crate::config::{EditorStyle, ThemePreset, config_path, key_match};
 use crate::models::split_timestamp_line;
 use app::{App, PendingEditCommand};
 use chrono::{Duration, Local};
@@ -208,6 +208,10 @@ fn handle_key_input(app: &mut App, key: event::KeyEvent) {
 fn handle_popup_events(app: &mut App, key: event::KeyEvent) -> bool {
     if app.show_theme_popup {
         handle_theme_switcher_popup(app, key);
+        return true;
+    }
+    if app.show_editor_style_popup {
+        handle_editor_style_popup(app, key);
         return true;
     }
     if app.show_help_popup {
@@ -478,6 +482,62 @@ fn handle_theme_switcher_popup(app: &mut App, key: event::KeyEvent) {
     }
 }
 
+fn open_editor_style_switcher(app: &mut App) {
+    if app.show_editor_style_popup {
+        return;
+    }
+
+    let current = app
+        .config
+        .ui
+        .editor_style
+        .as_deref()
+        .and_then(EditorStyle::from_name)
+        .unwrap_or_else(EditorStyle::default);
+    let selected = EditorStyle::all()
+        .iter()
+        .position(|style| *style == current)
+        .unwrap_or(0);
+    app.editor_style_list_state.select(Some(selected));
+    app.show_editor_style_popup = true;
+}
+
+fn handle_editor_style_popup(app: &mut App, key: event::KeyEvent) {
+    let styles = EditorStyle::all();
+    if styles.is_empty() {
+        app.show_editor_style_popup = false;
+        return;
+    }
+
+    let selected = app.editor_style_list_state.selected().unwrap_or(0);
+    if key_match(&key, &app.config.keybindings.popup.up) {
+        let next = if selected == 0 {
+            styles.len() - 1
+        } else {
+            selected - 1
+        };
+        app.editor_style_list_state.select(Some(next));
+    } else if key_match(&key, &app.config.keybindings.popup.down) {
+        let next = if selected >= styles.len() - 1 {
+            0
+        } else {
+            selected + 1
+        };
+        app.editor_style_list_state.select(Some(next));
+    } else if key_match(&key, &app.config.keybindings.popup.confirm) {
+        let index = app.editor_style_list_state.selected().unwrap_or(0);
+        let style = styles[index];
+        app.config.ui.editor_style = Some(style.name().to_string());
+        match app.config.save_to_path(&config_path()) {
+            Ok(_) => app.toast(format!("Editor style set to {}.", style.name())),
+            Err(_) => app.toast("Failed to save editor style."),
+        }
+        app.show_editor_style_popup = false;
+    } else if key_match(&key, &app.config.keybindings.popup.cancel) || key.code == KeyCode::Esc {
+        app.show_editor_style_popup = false;
+    }
+}
+
 fn handle_normal_mode(app: &mut App, key: event::KeyEvent) {
     if key_match(&key, &app.config.keybindings.global.help) {
         app.show_help_popup = true;
@@ -640,6 +700,8 @@ fn handle_normal_mode(app: &mut App, key: event::KeyEvent) {
         app.show_path_popup = true;
     } else if key_match(&key, &app.config.keybindings.global.theme_switcher) {
         open_theme_switcher(app);
+    } else if key_match(&key, &app.config.keybindings.global.editor_style_switcher) {
+        open_editor_style_switcher(app);
     }
 }
 
@@ -685,6 +747,42 @@ fn handle_editing_mode(app: &mut App, key: event::KeyEvent) {
         return;
     }
 
+    // Simple mode: no Vim keybindings, just forward to textarea
+    if !app.is_vim_mode() {
+        if key_match(&key, &app.config.keybindings.composer.clear) {
+            app.textarea = tui_textarea::TextArea::default();
+            app.transition_to(InputMode::Editing);
+            return;
+        }
+
+        if key_match(&key, &app.config.keybindings.composer.cancel) {
+            cancel_composer(app);
+            return;
+        }
+
+        if key_match(&key, &app.config.keybindings.composer.indent) {
+            indent_or_outdent_list_line(&mut app.textarea, true);
+            return;
+        }
+
+        if key_match(&key, &app.config.keybindings.composer.outdent) {
+            indent_or_outdent_list_line(&mut app.textarea, false);
+            return;
+        }
+
+        if key_match(&key, &app.config.keybindings.composer.newline) {
+            insert_newline_with_auto_indent(&mut app.textarea);
+            return;
+        }
+
+        // Forward all other keys to textarea
+        if app.textarea.input(key) {
+            app.composer_dirty = true;
+        }
+        return;
+    }
+
+    // Vim mode handling below
     if app.visual_hint_active && matches!(app.editor_mode, EditorMode::Visual(_)) {
         app.clear_visual_hint();
     }

@@ -171,6 +171,8 @@ impl Default for EditorConfig {
 pub struct UiConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub theme_preset: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub editor_style: Option<String>,
     pub line_numbers: bool,
 }
 
@@ -178,6 +180,7 @@ impl Default for UiConfig {
     fn default() -> Self {
         Self {
             theme_preset: None,
+            editor_style: None,
             line_numbers: true,
         }
     }
@@ -210,6 +213,7 @@ pub struct GlobalBindings {
     pub log_dir: Vec<String>,
     pub pomodoro: Vec<String>,
     pub theme_switcher: Vec<String>,
+    pub editor_style_switcher: Vec<String>,
 }
 
 impl Default for GlobalBindings {
@@ -228,6 +232,7 @@ impl Default for GlobalBindings {
             log_dir: vec!["o".to_string()],
             pomodoro: vec!["p".to_string()],
             theme_switcher: vec!["shift+t".to_string()],
+            editor_style_switcher: vec!["shift+v".to_string()],
         }
     }
 }
@@ -464,6 +469,43 @@ impl ThemePreset {
             .iter()
             .copied()
             .find(|preset| preset.name().eq_ignore_ascii_case(name.trim()))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EditorStyle {
+    Vim,
+    Simple,
+}
+
+impl EditorStyle {
+    pub fn default() -> Self {
+        EditorStyle::Vim
+    }
+
+    pub fn all() -> &'static [EditorStyle] {
+        &[EditorStyle::Vim, EditorStyle::Simple]
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            EditorStyle::Vim => "Vim",
+            EditorStyle::Simple => "Simple",
+        }
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            EditorStyle::Vim => "Full Vim keybindings with modal editing.",
+            EditorStyle::Simple => "Simple editing without Vim modes.",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        EditorStyle::all()
+            .iter()
+            .copied()
+            .find(|style| style.name().eq_ignore_ascii_case(name.trim()))
     }
 }
 

@@ -104,6 +104,9 @@ pub struct App<'a> {
     pub theme_list_state: ListState,
     pub theme_preview_backup: Option<Theme>,
 
+    pub show_editor_style_popup: bool,
+    pub editor_style_list_state: ListState,
+
     pub show_pomodoro_popup: bool,
     pub pomodoro_minutes_input: String,
     pub pomodoro_pending_task: Option<TaskItem>,
@@ -254,6 +257,8 @@ impl<'a> App<'a> {
             show_theme_popup: false,
             theme_list_state: ListState::default(),
             theme_preview_backup: None,
+            show_editor_style_popup: false,
+            editor_style_list_state: ListState::default(),
             show_pomodoro_popup: false,
             pomodoro_minutes_input: String::new(),
             pomodoro_pending_task: None,
@@ -462,6 +467,17 @@ impl<'a> App<'a> {
     pub fn toast(&mut self, message: impl Into<String>) {
         self.toast_message = Some(message.into());
         self.toast_expiry = Some(Local::now() + Duration::seconds(2));
+    }
+
+    /// Returns true if Vim-style editing is enabled
+    pub fn is_vim_mode(&self) -> bool {
+        self.config
+            .ui
+            .editor_style
+            .as_deref()
+            .and_then(crate::config::EditorStyle::from_name)
+            .unwrap_or_else(crate::config::EditorStyle::default)
+            == crate::config::EditorStyle::Vim
     }
 
     pub fn scroll_up(&mut self) {

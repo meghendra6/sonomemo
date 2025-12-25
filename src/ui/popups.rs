@@ -1,6 +1,6 @@
 use super::components::centered_rect;
 use crate::app::App;
-use crate::config::ThemePreset;
+use crate::config::{EditorStyle, ThemePreset};
 use crate::models::{EditorMode, InputMode, Mood, VisualKind};
 use crate::ui::color_parser::parse_color;
 use crate::ui::theme::ThemeTokens;
@@ -291,6 +291,7 @@ pub fn render_help_popup(f: &mut Frame, app: &App) {
                 ("Activity", fmt_keys(&kb.global.activity)),
                 ("Log dir", fmt_keys(&kb.global.log_dir)),
                 ("Theme presets", fmt_keys(&kb.global.theme_switcher)),
+                ("Editor style", fmt_keys(&kb.global.editor_style_switcher)),
                 ("Quit", fmt_keys(&kb.global.quit)),
             ],
         ),
@@ -318,15 +319,26 @@ pub fn render_help_popup(f: &mut Frame, app: &App) {
             ],
         ),
         (
-            "Composer",
-            vec![
-                ("Save", fmt_keys(&kb.composer.submit)),
-                ("New line", fmt_keys(&kb.composer.newline)),
-                ("Indent", fmt_keys(&kb.composer.indent)),
-                ("Outdent", fmt_keys(&kb.composer.outdent)),
-                ("Clear", fmt_keys(&kb.composer.clear)),
-                ("Back", fmt_keys(&kb.composer.cancel)),
-            ],
+            if app.is_vim_mode() {
+                "Composer (Vim mode)"
+            } else {
+                "Composer (Simple mode)"
+            },
+            {
+                let mut composer_entries = vec![
+                    ("Save", fmt_keys(&kb.composer.submit)),
+                    ("New line", fmt_keys(&kb.composer.newline)),
+                    ("Indent", fmt_keys(&kb.composer.indent)),
+                    ("Outdent", fmt_keys(&kb.composer.outdent)),
+                    ("Clear", fmt_keys(&kb.composer.clear)),
+                    ("Back", fmt_keys(&kb.composer.cancel)),
+                ];
+                if app.is_vim_mode() {
+                    composer_entries.push(("Vim motions", "hjkl, w, b, e, ...".to_string()));
+                    composer_entries.push(("Visual mode", "v, V, Ctrl+v".to_string()));
+                }
+                composer_entries
+            },
         ),
         (
             "Search",
@@ -623,6 +635,49 @@ pub fn render_theme_switcher_popup(f: &mut Frame, app: &mut App) {
         .highlight_symbol("> ")
         .highlight_style(highlight_style);
     f.render_stateful_widget(list, popup_layout[0], &mut app.theme_list_state);
+
+    let help = Paragraph::new("(Up/Down) Move  (Enter) Apply  (Esc) Cancel")
+        .style(Style::default().fg(tokens.ui_muted));
+    f.render_widget(help, popup_layout[1]);
+}
+
+pub fn render_editor_style_popup(f: &mut Frame, app: &mut App) {
+    let tokens = ThemeTokens::from_theme(&app.config.theme);
+    let block = Block::default()
+        .title(" Editor Style ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(tokens.ui_border_default));
+    let area = centered_rect(60, 30, f.area());
+    f.render_widget(Clear, area);
+    f.render_widget(block, area);
+
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .margin(1)
+        .split(area);
+
+    let name_style = Style::default().fg(tokens.ui_fg);
+    let desc_style = Style::default().fg(tokens.ui_muted);
+    let items: Vec<ListItem> = EditorStyle::all()
+        .iter()
+        .map(|style| {
+            let line = Line::from(vec![
+                Span::styled(style.name(), name_style),
+                Span::raw(" - "),
+                Span::styled(style.description(), desc_style),
+            ]);
+            ListItem::new(line)
+        })
+        .collect();
+
+    let highlight_style = Style::default()
+        .bg(tokens.ui_selection_bg)
+        .add_modifier(Modifier::BOLD);
+    let list = List::new(items)
+        .highlight_symbol("> ")
+        .highlight_style(highlight_style);
+    f.render_stateful_widget(list, popup_layout[0], &mut app.editor_style_list_state);
 
     let help = Paragraph::new("(Up/Down) Move  (Enter) Apply  (Esc) Cancel")
         .style(Style::default().fg(tokens.ui_muted));
