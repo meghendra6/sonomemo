@@ -312,6 +312,44 @@ fn next_non_empty_is_timestamp(lines: &[&str], start: usize) -> bool {
     false
 }
 
+fn normalize_task_text(text: &str) -> String {
+    let normalized = text
+        .split_whitespace()
+        .collect::<Vec<&str>>()
+        .join(" ");
+    normalized.to_lowercase()
+}
+
+fn strip_carryover_marker(text: &str) -> (String, Option<String>) {
+    let trimmed = text.trim_end();
+    let open = '⟦';
+    let close = '⟧';
+    let Some(start) = trimmed.rfind(open) else {
+        return (trimmed.to_string(), None);
+    };
+    let Some(close_offset) = trimmed[start..].find(close) else {
+        return (trimmed.to_string(), None);
+    };
+    let close_index = start + close_offset;
+    let close_len = close.len_utf8();
+    if close_index + close_len != trimmed.len() {
+        return (trimmed.to_string(), None);
+    }
+
+    let date = &trimmed[start + open.len_utf8()..close_index];
+    if NaiveDate::parse_from_str(date, "%Y-%m-%d").is_err() {
+        return (trimmed.to_string(), None);
+    }
+
+    let base = trimmed[..start].trim_end().to_string();
+    (base, Some(date.to_string()))
+}
+
+fn task_identity_from_text(text: &str) -> (String, Option<String>) {
+    let (base, carryover_from) = strip_carryover_marker(text);
+    (normalize_task_text(&base), carryover_from)
+}
+
 fn parse_task_content(content: &str, path_str: &str) -> Vec<TaskItem> {
     let mut tasks: Vec<TaskItem> = Vec::new();
 
@@ -327,12 +365,16 @@ fn parse_task_content(content: &str, path_str: &str) -> Vec<TaskItem> {
 
         if let Some(text) = s.strip_prefix("- [ ] ") {
             let (text, tomato_count) = strip_trailing_tomatoes(text);
+            let text = text.trim();
+            let (task_identity, carryover_from) = task_identity_from_text(text);
             tasks.push(TaskItem {
-                text: text.trim().to_string(),
+                text: text.to_string(),
                 indent: indent_spaces.div_ceil(2),
                 tomato_count,
                 file_path: path_str.to_string(),
                 line_number: i,
+                task_identity,
+                carryover_from,
             });
         }
     }
@@ -358,6 +400,77 @@ fn parse_indent(s: &str) -> (usize, usize) {
         }
     }
     (i, spaces)
+}
+
+struct ParsedTaskLine {
+    identity: String,
+    carryover_from: Option<String>,
+    is_done: bool,
+}
+
+fn parse_task_line(line: &str) -> Option<ParsedTaskLine> {
+    if line.contains("System: Carryover Checked") {
+        return None;
+    }
+
+    let s = strip_timestamp_prefix(line);
+    let (indent_bytes, _) = parse_indent(s);
+    let s = &s[indent_bytes..];
+
+    let (is_done, text) = if let Some(text) = s.strip_prefix("- [ ] ") {
+        (false, text)
+    } else if let Some(text) = s.strip_prefix("- [x] ") {
+        (true, text)
+    } else if let Some(text) = s.strip_prefix("- [X] ") {
+        (true, text)
+    } else {
+        return None;
+    };
+
+    let (text, _) = strip_trailing_tomatoes(text);
+    let text = text.trim();
+    let (identity, carryover_from) = task_identity_from_text(text);
+
+    Some(ParsedTaskLine {
+        identity,
+        carryover_from,
+        is_done,
+    })
+}
+
+fn mark_task_completed_line(line: &str) -> Option<String> {
+    if line.contains("- [ ]") {
+        Some(line.replacen("- [ ]", "- [x]", 1))
+    } else {
+        None
+    }
+}
+
+fn mark_task_completed_at_line(file_path: &str, line_number: usize) -> io::Result<bool> {
+    let content = fs::read_to_string(file_path)?;
+    let mut lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
+
+    if line_number >= lines.len() {
+        return Ok(false);
+    }
+
+    let updated = if let Some(new_line) = mark_task_completed_line(&lines[line_number]) {
+        lines[line_number] = new_line;
+        true
+    } else {
+        false
+    };
+
+    if updated {
+        let mut new_content = lines.join("\n");
+        if !new_content.ends_with('\n') {
+            new_content.push('\n');
+        }
+        let mut file = fs::File::create(file_path)?;
+        file.write_all(new_content.as_bytes())?;
+    }
+
+    Ok(updated)
 }
 
 /// Toggles the status of a task checkbox ([ ] <-> [x]) at the given line.
@@ -391,6 +504,89 @@ pub fn toggle_task_status(file_path: &str, line_number: usize) -> io::Result<()>
     file.write_all(new_content.as_bytes())?;
 
     Ok(())
+}
+
+fn extract_date_from_path(file_path: &str) -> Option<NaiveDate> {
+    let path = Path::new(file_path);
+    let stem = path.file_stem()?.to_str()?;
+    NaiveDate::parse_from_str(stem, "%Y-%m-%d").ok()
+}
+
+pub fn complete_task_chain(log_path: &Path, task: &TaskItem) -> io::Result<usize> {
+    let mut completed_count = 0usize;
+    if mark_task_completed_at_line(&task.file_path, task.line_number)? {
+        completed_count += 1;
+    }
+
+    let Some(from_date) = task.carryover_from.clone() else {
+        return Ok(completed_count);
+    };
+    let Some(current_date) = extract_date_from_path(&task.file_path) else {
+        return Ok(completed_count);
+    };
+
+    let mut pending_dates = vec![from_date];
+    let mut visited_dates = std::collections::HashSet::new();
+
+    while let Some(date_str) = pending_dates.pop() {
+        if !visited_dates.insert(date_str.clone()) {
+            continue;
+        }
+
+        let Ok(date) = NaiveDate::parse_from_str(&date_str, "%Y-%m-%d") else {
+            continue;
+        };
+        if date >= current_date {
+            continue;
+        }
+
+        let path = get_file_path_for_date(log_path, &date_str);
+        if !path.exists() {
+            continue;
+        }
+
+        let content = fs::read_to_string(&path)?;
+        let mut lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
+        let mut changed = false;
+        let mut next_dates: Vec<String> = Vec::new();
+
+        for line in &mut lines {
+            let Some(parsed) = parse_task_line(line) else {
+                continue;
+            };
+            if parsed.identity != task.task_identity {
+                continue;
+            }
+
+            if !parsed.is_done {
+                if let Some(new_line) = mark_task_completed_line(line) {
+                    *line = new_line;
+                    completed_count += 1;
+                    changed = true;
+                }
+            }
+
+            if let Some(next_date) = parsed.carryover_from {
+                next_dates.push(next_date);
+            }
+        }
+
+        if changed {
+            let mut new_content = lines.join("\n");
+            if !new_content.ends_with('\n') {
+                new_content.push('\n');
+            }
+            fs::write(&path, new_content)?;
+        }
+
+        for next_date in next_dates {
+            if !visited_dates.contains(&next_date) {
+                pending_dates.push(next_date);
+            }
+        }
+    }
+
+    Ok(completed_count)
 }
 
 pub fn toggle_todo_status(entry: &LogEntry) -> io::Result<()> {
@@ -704,5 +900,88 @@ mod tests {
         assert_eq!(entries[0].content, "## [09:00:00]\nFirst\n\n- item");
         assert_eq!(entries[0].end_line, 3);
         assert_eq!(entries[1].line_number, 5);
+    }
+
+    fn write_log(dir: &Path, date: &str, content: &str) {
+        let path = get_file_path_for_date(dir, date);
+        fs::write(path, content).expect("write log");
+    }
+
+    fn read_tasks_for_date(dir: &Path, date: &str) -> Vec<TaskItem> {
+        let path = get_file_path_for_date(dir, date);
+        let content = fs::read_to_string(&path).expect("read log");
+        parse_task_content(&content, &path.to_string_lossy())
+    }
+
+    #[test]
+    fn complete_task_chain_marks_previous_carryover() {
+        let dir = temp_log_dir();
+        write_log(&dir, "2024-01-01", "- [ ] Write  Report\n");
+        write_log(
+            &dir,
+            "2024-01-02",
+            "- [ ] write report ⟦2024-01-01⟧\n",
+        );
+
+        let task = read_tasks_for_date(&dir, "2024-01-02")
+            .into_iter()
+            .next()
+            .expect("task");
+        let completed = complete_task_chain(&dir, &task).expect("complete chain");
+
+        assert_eq!(completed, 2);
+        let day1 = fs::read_to_string(dir.join("2024-01-01.md")).expect("read day1");
+        let day2 = fs::read_to_string(dir.join("2024-01-02.md")).expect("read day2");
+        assert_eq!(day1.lines().next().unwrap_or(""), "- [x] Write  Report");
+        assert_eq!(
+            day2.lines().next().unwrap_or(""),
+            "- [x] write report ⟦2024-01-01⟧"
+        );
+    }
+
+    #[test]
+    fn complete_task_chain_skips_unrelated_same_text() {
+        let dir = temp_log_dir();
+        write_log(&dir, "2024-02-01", "- [ ] Same Task\n");
+        write_log(&dir, "2024-02-02", "- [ ] Same Task\n");
+        write_log(
+            &dir,
+            "2024-02-03",
+            "- [ ] Same Task ⟦2024-02-02⟧\n",
+        );
+
+        let task = read_tasks_for_date(&dir, "2024-02-03")
+            .into_iter()
+            .next()
+            .expect("task");
+        let completed = complete_task_chain(&dir, &task).expect("complete chain");
+
+        assert_eq!(completed, 2);
+        let day1 = fs::read_to_string(dir.join("2024-02-01.md")).expect("read day1");
+        let day2 = fs::read_to_string(dir.join("2024-02-02.md")).expect("read day2");
+        assert_eq!(day1.lines().next().unwrap_or(""), "- [ ] Same Task");
+        assert_eq!(day2.lines().next().unwrap_or(""), "- [x] Same Task");
+    }
+
+    #[test]
+    fn complete_task_chain_does_not_touch_future_tasks() {
+        let dir = temp_log_dir();
+        write_log(&dir, "2024-03-01", "- [ ] Future Task\n");
+        write_log(
+            &dir,
+            "2024-03-02",
+            "- [ ] Future Task ⟦2024-03-01⟧\n",
+        );
+        write_log(&dir, "2024-03-03", "- [ ] Future Task\n");
+
+        let task = read_tasks_for_date(&dir, "2024-03-02")
+            .into_iter()
+            .next()
+            .expect("task");
+        let completed = complete_task_chain(&dir, &task).expect("complete chain");
+
+        assert_eq!(completed, 2);
+        let day3 = fs::read_to_string(dir.join("2024-03-03.md")).expect("read day3");
+        assert_eq!(day3.lines().next().unwrap_or(""), "- [ ] Future Task");
     }
 }

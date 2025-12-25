@@ -57,6 +57,8 @@ pub struct TaskItem {
     pub tomato_count: usize,
     pub file_path: String,
     pub line_number: usize,
+    pub task_identity: String,
+    pub carryover_from: Option<String>,
 }
 
 #[derive(Clone)]

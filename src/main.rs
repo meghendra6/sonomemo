@@ -605,7 +605,16 @@ fn handle_normal_mode(app: &mut App, key: event::KeyEvent) {
         if let Some(i) = app.tasks_state.selected()
             && i < app.tasks.len() {
                 let task = app.tasks[i].clone();
-                let _ = storage::toggle_task_status(&task.file_path, task.line_number);
+                if let Ok(completed) = storage::complete_task_chain(&app.config.data.log_path, &task)
+                    && task.carryover_from.is_some()
+                    && completed > 0 {
+                        let message = if completed == 1 {
+                            "Completed 1 carry-over task".to_string()
+                        } else {
+                            format!("Completed {} carry-over tasks", completed)
+                        };
+                        app.toast(message);
+                    }
                 app.update_logs();
             }
     } else if app.navigate_focus == models::NavigateFocus::Tasks
