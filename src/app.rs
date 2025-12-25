@@ -1,7 +1,8 @@
 use crate::config::{Config, Theme};
 use crate::models::{
-    InputMode, LogEntry, NavigateFocus, PomodoroTarget, TaskItem, count_trailing_tomatoes,
-    is_heading_timestamp_line, split_timestamp_line, strip_timestamp_prefix,
+    EditorMode, InputMode, LogEntry, NavigateFocus, PomodoroTarget, TaskItem,
+    count_trailing_tomatoes, is_heading_timestamp_line, split_timestamp_line,
+    strip_timestamp_prefix,
 };
 use crate::storage;
 use chrono::{DateTime, Duration, Local, NaiveDate};
@@ -30,6 +31,21 @@ pub struct EditingEntry {
     pub search_query: Option<String>,
 }
 
+#[derive(Clone)]
+pub struct EditorSnapshot {
+    pub lines: Vec<String>,
+    pub cursor: (usize, usize),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum PendingEditCommand {
+    Delete,
+    Yank,
+    GoToTop,
+    Replace,
+    Change,
+}
+
 pub struct App<'a> {
     pub input_mode: InputMode,
     pub navigate_focus: NavigateFocus,
@@ -37,6 +53,18 @@ pub struct App<'a> {
     pub textarea_viewport_row: u16,
     pub textarea_viewport_col: u16,
     pub composer_dirty: bool,
+    pub editor_mode: EditorMode,
+    pub visual_anchor: Option<(usize, usize)>,
+    pub pending_command: Option<PendingEditCommand>,
+    pub pending_count: usize,
+    pub yank_buffer: String,
+    pub editor_undo: Vec<EditorSnapshot>,
+    pub editor_redo: Vec<EditorSnapshot>,
+    pub insert_snapshot: Option<EditorSnapshot>,
+    pub insert_modified: bool,
+    pub visual_hint_message: Option<String>,
+    pub visual_hint_expiry: Option<DateTime<Local>>,
+    pub visual_hint_active: bool,
     pub active_date: String,
     pub logs: Vec<LogEntry>,
     pub logs_state: ListState,
@@ -175,6 +203,18 @@ impl<'a> App<'a> {
             textarea_viewport_row: 0,
             textarea_viewport_col: 0,
             composer_dirty: false,
+            editor_mode: EditorMode::Normal,
+            visual_anchor: None,
+            pending_command: None,
+            pending_count: 0,
+            yank_buffer: String::new(),
+            editor_undo: Vec::new(),
+            editor_redo: Vec::new(),
+            insert_snapshot: None,
+            insert_modified: false,
+            visual_hint_message: None,
+            visual_hint_expiry: None,
+            visual_hint_active: false,
             active_date,
             logs,
             logs_state,
@@ -551,6 +591,7 @@ impl<'a> App<'a> {
                     self.navigate_focus = NavigateFocus::Timeline;
                 }
                 self.composer_dirty = false;
+                self.reset_editor_state();
             }
             InputMode::Editing => {
                 self.textarea.set_placeholder_text(PLACEHOLDER_COMPOSE);
@@ -558,6 +599,7 @@ impl<'a> App<'a> {
                 self.textarea_viewport_row = 0;
                 self.textarea_viewport_col = 0;
                 self.composer_dirty = false;
+                self.reset_editor_state();
                 // Return to full log view when entering Compose from search results (unless editing an entry)
                 if self.is_search_result && self.editing_entry.is_none() {
                     self.update_logs();
@@ -565,6 +607,18 @@ impl<'a> App<'a> {
                 }
                 self.textarea.move_cursor(CursorMove::Bottom);
                 self.textarea.move_cursor(CursorMove::End);
+                let (row, col) = self.textarea.cursor();
+                let line_len = self
+                    .textarea
+                    .lines()
+                    .get(row)
+                    .map(|line| line.chars().count())
+                    .unwrap_or(0);
+                if line_len > 0 && col >= line_len {
+                    let new_col = line_len.saturating_sub(1);
+                    self.textarea
+                        .move_cursor(CursorMove::Jump(row as u16, new_col as u16));
+                }
             }
             InputMode::Search => {
                 self.textarea = TextArea::default();
@@ -572,9 +626,103 @@ impl<'a> App<'a> {
                 self.textarea_viewport_row = 0;
                 self.textarea_viewport_col = 0;
                 self.composer_dirty = false;
+                self.reset_editor_state();
             }
         }
         self.input_mode = mode;
+    }
+
+    pub fn reset_editor_state(&mut self) {
+        self.editor_mode = EditorMode::Normal;
+        self.visual_anchor = None;
+        self.pending_command = None;
+        self.pending_count = 0;
+        self.insert_snapshot = None;
+        self.insert_modified = false;
+        self.editor_undo.clear();
+        self.editor_redo.clear();
+        self.clear_visual_hint();
+    }
+
+    pub fn editor_snapshot(&self) -> EditorSnapshot {
+        EditorSnapshot {
+            lines: self.textarea.lines().to_vec(),
+            cursor: self.textarea.cursor(),
+        }
+    }
+
+    pub fn restore_editor_snapshot(&mut self, snapshot: EditorSnapshot) {
+        self.textarea = TextArea::from(snapshot.lines);
+        self.textarea.set_placeholder_text(PLACEHOLDER_COMPOSE);
+        self.textarea
+            .move_cursor(CursorMove::Jump(snapshot.cursor.0 as u16, snapshot.cursor.1 as u16));
+    }
+
+    pub fn record_undo_snapshot(&mut self) {
+        self.editor_undo.push(self.editor_snapshot());
+        self.editor_redo.clear();
+    }
+
+    pub fn begin_insert_group(&mut self) {
+        if self.insert_snapshot.is_none() {
+            self.insert_snapshot = Some(self.editor_snapshot());
+            self.insert_modified = false;
+            self.editor_redo.clear();
+        }
+    }
+
+    pub fn mark_insert_modified(&mut self) {
+        self.insert_modified = true;
+    }
+
+    pub fn commit_insert_group(&mut self) {
+        if !self.insert_modified {
+            self.insert_snapshot = None;
+            return;
+        }
+
+        if let Some(snapshot) = self.insert_snapshot.take() {
+            self.editor_undo.push(snapshot);
+            self.editor_redo.clear();
+        }
+        self.insert_modified = false;
+    }
+
+    pub fn editor_undo(&mut self) -> bool {
+        let Some(snapshot) = self.editor_undo.pop() else {
+            return false;
+        };
+        let current = self.editor_snapshot();
+        self.editor_redo.push(current);
+        self.restore_editor_snapshot(snapshot);
+        true
+    }
+
+    pub fn editor_redo(&mut self) -> bool {
+        let Some(snapshot) = self.editor_redo.pop() else {
+            return false;
+        };
+        let current = self.editor_snapshot();
+        self.editor_undo.push(current);
+        self.restore_editor_snapshot(snapshot);
+        true
+    }
+
+    pub fn set_yank_buffer(&mut self, text: String) {
+        self.yank_buffer = text;
+        self.textarea.set_yank_text(self.yank_buffer.clone());
+    }
+
+    pub fn show_visual_hint(&mut self, message: impl Into<String>) {
+        self.visual_hint_message = Some(message.into());
+        self.visual_hint_expiry = Some(Local::now() + Duration::seconds(2));
+        self.visual_hint_active = true;
+    }
+
+    pub fn clear_visual_hint(&mut self) {
+        self.visual_hint_message = None;
+        self.visual_hint_expiry = None;
+        self.visual_hint_active = false;
     }
 }
 

@@ -9,7 +9,8 @@ use ratatui::{
 
 use crate::app::{App, PLACEHOLDER_COMPOSE};
 use crate::models::{
-    InputMode, NavigateFocus, is_heading_timestamp_line, is_timestamped_line, split_timestamp_line,
+    EditorMode, InputMode, NavigateFocus, VisualKind, is_heading_timestamp_line,
+    is_timestamped_line, split_timestamp_line,
 };
 use ratatui::style::Stylize;
 use regex::Regex;
@@ -663,11 +664,15 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                     PLACEHOLDER_COMPOSE,
                     &tokens,
                     show_line_numbers,
+                    true,
                 ));
             } else {
                 for (logical_idx, line) in lines.iter().enumerate() {
                     let is_cursor_line = logical_idx == cursor_row;
+                    let selection =
+                        selection_range_for_line(app, logical_idx, line.chars().count());
                     let wrapped = wrap_line_for_editor(line, content_width);
+                    let mut segment_start_col = 0usize;
 
                     if is_cursor_line {
                         // Calculate cursor position within wrapped lines
@@ -679,6 +684,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                     }
 
                     for (wrap_idx, wline) in wrapped.iter().enumerate() {
+                        let segment_len = wline.chars().count();
                         let is_first_wrap = wrap_idx == 0;
                         let is_cursor_wrap =
                             is_cursor_line && (visual_lines.len() + wrap_idx == cursor_visual_row);
@@ -689,7 +695,10 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                             logical_idx,
                             show_line_numbers,
                             is_first_wrap,
+                            selection,
+                            segment_start_col,
                         ));
+                        segment_start_col = segment_start_col.saturating_add(segment_len);
                     }
                 }
             }
@@ -928,6 +937,18 @@ fn find_cursor_in_wrapped_lines(wrapped: &[String], cursor_col: usize) -> (usize
 }
 
 /// Compose a wrapped line for rendering in editor.
+#[derive(Clone, Copy)]
+struct SelectionRange {
+    start: usize,
+    end: usize,
+}
+
+#[derive(Clone)]
+struct StyledSegment {
+    text: String,
+    style: Style,
+}
+
 fn compose_wrapped_line(
     line: &str,
     tokens: &theme::ThemeTokens,
@@ -935,6 +956,8 @@ fn compose_wrapped_line(
     logical_line_number: usize,
     show_line_numbers: bool,
     is_first_wrap: bool,
+    selection: Option<SelectionRange>,
+    wrap_start_col: usize,
 ) -> Line<'static> {
     let mut spans: Vec<Span<'static>> = Vec::new();
 
@@ -965,26 +988,48 @@ fn compose_wrapped_line(
         spans.push(Span::styled("↪ ", Style::default().fg(tokens.ui_muted)));
     }
 
+    let mut content_segments: Vec<StyledSegment> = Vec::new();
+
     // For first wrapped line, parse indent and bullets; for continuations, just show text
     if is_first_wrap {
         let (indent_level, indent, rest) = split_indent(line);
         if !indent.is_empty() {
-            spans.push(Span::raw(indent.to_string()));
+            content_segments.push(StyledSegment {
+                text: indent.to_string(),
+                style: Style::default(),
+            });
         }
         if let Some((bullet, tail)) = replace_list_bullet(rest, indent_level) {
-            spans.push(Span::styled(
-                format!("{bullet} "),
-                Style::default()
+            content_segments.push(StyledSegment {
+                text: format!("{bullet} "),
+                style: Style::default()
                     .fg(tokens.ui_accent)
                     .add_modifier(Modifier::BOLD),
-            ));
-            spans.push(Span::raw(tail.to_string()));
+            });
+            content_segments.push(StyledSegment {
+                text: tail.to_string(),
+                style: Style::default(),
+            });
         } else {
-            spans.push(Span::raw(rest.to_string()));
+            content_segments.push(StyledSegment {
+                text: rest.to_string(),
+                style: Style::default(),
+            });
         }
     } else {
-        spans.push(Span::raw(line.to_string()));
+        content_segments.push(StyledSegment {
+            text: line.to_string(),
+            style: Style::default(),
+        });
     }
+
+    let selection_spans = apply_selection_to_segments(
+        content_segments,
+        selection,
+        wrap_start_col,
+        tokens.ui_selection_bg,
+    );
+    spans.extend(selection_spans);
 
     let mut rendered = Line::from(spans);
     if is_cursor {
@@ -993,10 +1038,100 @@ fn compose_wrapped_line(
     rendered
 }
 
+fn apply_selection_to_segments(
+    segments: Vec<StyledSegment>,
+    selection: Option<SelectionRange>,
+    wrap_start_col: usize,
+    selection_bg: ratatui::style::Color,
+) -> Vec<Span<'static>> {
+    if segments.is_empty() {
+        if selection.is_some() {
+            return vec![Span::styled(
+                " ",
+                Style::default().bg(selection_bg),
+            )];
+        }
+        return Vec::new();
+    }
+
+    let Some(selection) = selection else {
+        return segments
+            .into_iter()
+            .map(|seg| Span::styled(seg.text, seg.style))
+            .collect();
+    };
+
+    let total_len: usize = segments.iter().map(|seg| seg.text.chars().count()).sum();
+    if total_len == 0 {
+        return vec![Span::styled(
+            " ",
+            Style::default().bg(selection_bg),
+        )];
+    }
+    let sel_start = selection.start.saturating_sub(wrap_start_col);
+    let sel_end = selection.end.saturating_sub(wrap_start_col);
+    let sel_start = sel_start.min(total_len);
+    let sel_end = sel_end.min(total_len);
+
+    if sel_start >= sel_end {
+        return segments
+            .into_iter()
+            .map(|seg| Span::styled(seg.text, seg.style))
+            .collect();
+    }
+
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut pos = 0usize;
+    for seg in segments {
+        let seg_len = seg.text.chars().count();
+        let seg_start = pos;
+        let seg_end = pos + seg_len;
+        if sel_end <= seg_start || sel_start >= seg_end {
+            spans.push(Span::styled(seg.text, seg.style));
+        } else {
+            let local_start = sel_start.saturating_sub(seg_start).min(seg_len);
+            let local_end = sel_end.saturating_sub(seg_start).min(seg_len);
+            if local_start > 0 {
+                spans.push(Span::styled(
+                    slice_by_char(&seg.text, 0, local_start),
+                    seg.style,
+                ));
+            }
+            if local_end > local_start {
+                let mut selected_style = seg.style;
+                selected_style = selected_style.bg(selection_bg);
+                spans.push(Span::styled(
+                    slice_by_char(&seg.text, local_start, local_end),
+                    selected_style,
+                ));
+            }
+            if local_end < seg_len {
+                spans.push(Span::styled(
+                    slice_by_char(&seg.text, local_end, seg_len),
+                    seg.style,
+                ));
+            }
+        }
+        pos = seg_end;
+    }
+    spans
+}
+
+fn slice_by_char(s: &str, start: usize, end: usize) -> String {
+    if start >= end {
+        return String::new();
+    }
+    s.chars()
+        .skip(start)
+        .take(end.saturating_sub(start))
+        .collect()
+}
+
 fn compose_placeholder_line(
     placeholder: &str,
     tokens: &theme::ThemeTokens,
     show_line_numbers: bool,
+    is_cursor: bool,
 ) -> Line<'static> {
     let mut spans: Vec<Span<'static>> = compose_prefix_spans(0, tokens, show_line_numbers);
     spans.push(Span::styled(
@@ -1005,7 +1140,11 @@ fn compose_placeholder_line(
             .fg(tokens.ui_muted)
             .add_modifier(Modifier::DIM),
     ));
-    Line::from(spans)
+    let mut line = Line::from(spans);
+    if is_cursor {
+        line.style = Style::default().bg(tokens.ui_cursorline_bg);
+    }
+    line
 }
 
 fn compose_prefix_spans(
@@ -1031,6 +1170,80 @@ fn compose_prefix_width(show_line_numbers: bool) -> u16 {
         width += (LINE_NUMBER_WIDTH + 1) as u16;
     }
     width
+}
+
+fn selection_range_for_line(
+    app: &App,
+    line_idx: usize,
+    line_len: usize,
+) -> Option<SelectionRange> {
+    let EditorMode::Visual(kind) = app.editor_mode else {
+        return None;
+    };
+    let anchor = app.visual_anchor?;
+    let cursor = app.textarea.cursor();
+
+    match kind {
+        VisualKind::Char => {
+            let (start, end) = ordered_positions(anchor, cursor);
+            if line_idx < start.0 || line_idx > end.0 {
+                return None;
+            }
+            let (start_col, mut end_col) = if start.0 == end.0 {
+                (start.1, end.1.saturating_add(1))
+            } else if line_idx == start.0 {
+                (start.1, line_len)
+            } else if line_idx == end.0 {
+                (0, end.1.saturating_add(1))
+            } else {
+                (0, line_len)
+            };
+            if line_len == 0 {
+                end_col = 0;
+            }
+            Some(SelectionRange {
+                start: start_col.min(line_len),
+                end: end_col.min(line_len),
+            })
+        }
+        VisualKind::Line => {
+            let (start, end) = ordered_positions(anchor, cursor);
+            if line_idx < start.0 || line_idx > end.0 {
+                return None;
+            }
+            Some(SelectionRange {
+                start: 0,
+                end: line_len,
+            })
+        }
+        VisualKind::Block => {
+            let row_start = anchor.0.min(cursor.0);
+            let row_end = anchor.0.max(cursor.0);
+            if line_idx < row_start || line_idx > row_end {
+                return None;
+            }
+            let col_start = anchor.1.min(cursor.1);
+            let col_end = anchor.1.max(cursor.1).saturating_add(1);
+            if line_len == 0 || col_start >= line_len {
+                return None;
+            }
+            Some(SelectionRange {
+                start: col_start.min(line_len),
+                end: col_end.min(line_len),
+            })
+        }
+    }
+}
+
+fn ordered_positions(
+    a: (usize, usize),
+    b: (usize, usize),
+) -> ((usize, usize), (usize, usize)) {
+    if a <= b {
+        (a, b)
+    } else {
+        (b, a)
+    }
 }
 
 fn split_indent(line: &str) -> (usize, &str, &str) {
@@ -1079,7 +1292,11 @@ fn render_status_bar(f: &mut Frame, area: Rect, app: &App, tokens: &theme::Theme
             NavigateFocus::Timeline => "NAV:TL",
             NavigateFocus::Tasks => "NAV:TS",
         },
-        InputMode::Editing => "[Compose]",
+        InputMode::Editing => match app.editor_mode {
+            EditorMode::Normal => "[NORMAL]",
+            EditorMode::Insert => "[INSERT]",
+            EditorMode::Visual(_) => "[VISUAL]",
+        },
         InputMode::Search => "SEARCH",
     };
 
@@ -1119,20 +1336,32 @@ fn render_status_bar(f: &mut Frame, area: Rect, app: &App, tokens: &theme::Theme
         ));
     }
 
-    if let Some(toast) = app.toast_message.as_deref()
+    let status_message = if let Some(hint) = app.visual_hint_message.as_deref() {
+        if hint.is_empty() {
+            None
+        } else {
+            Some((hint, tokens.ui_muted))
+        }
+    } else if let Some(toast) = app.toast_message.as_deref()
         && !toast.is_empty() {
+            Some((toast, tokens.ui_toast_info))
+    } else {
+        None
+    };
+
+    if let Some((message, color)) = status_message {
             if !right_plain.is_empty() {
                 right_plain.push_str("  ");
                 right_spans.push(Span::raw("  "));
             }
-            right_plain.push_str(toast);
+            right_plain.push_str(message);
             right_spans.push(Span::styled(
-                toast,
+                message,
                 Style::default()
-                    .fg(tokens.ui_toast_info)
+                    .fg(color)
                     .add_modifier(Modifier::BOLD),
             ));
-        }
+    }
 
     let min_left_width = 10u16;
     let mut right_width = UnicodeWidthStr::width(right_plain.as_str()) as u16;
@@ -1232,27 +1461,27 @@ mod tests {
     fn renders_bullets_with_indentation_levels() {
         let tokens = ThemeTokens::from_theme(&Theme::default());
 
-        let top = compose_wrapped_line("* item1", &tokens, false, 0, false, true);
+        let top = compose_wrapped_line("* item1", &tokens, false, 0, false, true, None, 0);
         assert_eq!(line_to_string(&top), "| • item1");
 
-        let nested = compose_wrapped_line("  * sub1", &tokens, false, 1, false, true);
+        let nested = compose_wrapped_line("  * sub1", &tokens, false, 1, false, true, None, 0);
         assert_eq!(line_to_string(&nested), "|   ◦ sub1");
 
-        let deep = compose_wrapped_line("    - sub2", &tokens, false, 2, false, true);
+        let deep = compose_wrapped_line("    - sub2", &tokens, false, 2, false, true, None, 0);
         assert_eq!(line_to_string(&deep), "|     ▪ sub2");
     }
 
     #[test]
     fn preserves_non_list_lines_verbatim() {
         let tokens = ThemeTokens::from_theme(&Theme::default());
-        let line = compose_wrapped_line("plain text", &tokens, false, 0, false, true);
+        let line = compose_wrapped_line("plain text", &tokens, false, 0, false, true, None, 0);
         assert_eq!(line_to_string(&line), "| plain text");
     }
 
     #[test]
     fn renders_line_numbers_in_gutter() {
         let tokens = ThemeTokens::from_theme(&Theme::default());
-        let line = compose_wrapped_line("plain text", &tokens, false, 9, true, true);
+        let line = compose_wrapped_line("plain text", &tokens, false, 9, true, true, None, 0);
         assert_eq!(line_to_string(&line), " 10 | plain text");
     }
 

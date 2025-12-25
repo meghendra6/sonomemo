@@ -5,6 +5,20 @@ pub enum InputMode {
     Search,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum EditorMode {
+    Normal,
+    Insert,
+    Visual(VisualKind),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum VisualKind {
+    Char,
+    Line,
+    Block,
+}
+
 #[derive(Clone, Copy, PartialEq)]
 pub enum NavigateFocus {
     Timeline,

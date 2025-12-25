@@ -1,7 +1,8 @@
 use crossterm::{
     event::{
         self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind,
-        KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+        KeyModifiers, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
+        PushKeyboardEnhancementFlags,
     },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
@@ -20,9 +21,9 @@ mod ui;
 
 use crate::config::{config_path, key_match, ThemePreset};
 use crate::models::split_timestamp_line;
-use app::App;
+use app::{App, PendingEditCommand};
 use chrono::{Duration, Local};
-use models::{InputMode, Mood};
+use models::{EditorMode, InputMode, Mood, VisualKind};
 use tui_textarea::CursorMove;
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -136,6 +137,11 @@ fn check_timers(app: &mut App) {
         && Local::now() >= expiry {
             app.toast_expiry = None;
             app.toast_message = None;
+        }
+
+    if let Some(expiry) = app.visual_hint_expiry
+        && Local::now() >= expiry {
+            app.clear_visual_hint();
         }
 }
 
@@ -662,96 +668,1371 @@ fn handle_search_mode(app: &mut App, key: event::KeyEvent) {
 }
 
 fn handle_editing_mode(app: &mut App, key: event::KeyEvent) {
-    if key_match(&key, &app.config.keybindings.composer.cancel) {
-        if composer_has_unsaved_input(app) {
-            app.show_discard_popup = true;
-        } else {
-            app.editing_entry = None;
-            app.textarea = tui_textarea::TextArea::default();
-            app.transition_to(InputMode::Navigate);
+    if key_match(&key, &app.config.keybindings.composer.submit) {
+        app.commit_insert_group();
+        submit_composer(app);
+        return;
+    }
+
+    if app.visual_hint_active && matches!(app.editor_mode, EditorMode::Visual(_)) {
+        app.clear_visual_hint();
+    }
+
+    if matches!(app.editor_mode, EditorMode::Insert | EditorMode::Visual(_))
+        && key.code == KeyCode::Esc
+        && !key.modifiers.contains(KeyModifiers::CONTROL)
+    {
+        match app.editor_mode {
+            EditorMode::Insert => exit_insert_mode(app),
+            EditorMode::Visual(_) => exit_visual_mode(app),
+            EditorMode::Normal => {}
         }
-    } else if key_match(&key, &app.config.keybindings.composer.clear) {
+        return;
+    }
+
+    if key_match(&key, &app.config.keybindings.composer.clear) {
+        app.commit_insert_group();
         app.textarea = tui_textarea::TextArea::default();
         app.transition_to(InputMode::Editing);
-    } else if key_match(&key, &app.config.keybindings.composer.indent) {
-        if !indent_or_outdent_list_line(&mut app.textarea, true) {
-            let _ = app.textarea.insert_tab();
-            app.composer_dirty = true;
-        } else {
-            app.composer_dirty = true;
+        return;
+    }
+
+    if key_match(&key, &app.config.keybindings.composer.cancel)
+        && matches!(app.editor_mode, EditorMode::Normal)
+    {
+        app.commit_insert_group();
+        cancel_composer(app);
+        return;
+    }
+
+    match app.editor_mode {
+        EditorMode::Normal => handle_editor_normal(app, key),
+        EditorMode::Insert => handle_editor_insert(app, key),
+        EditorMode::Visual(kind) => handle_editor_visual(app, key, kind),
+    }
+}
+
+fn cancel_composer(app: &mut App) {
+    if composer_has_unsaved_input(app) {
+        app.show_discard_popup = true;
+    } else {
+        app.editing_entry = None;
+        app.textarea = tui_textarea::TextArea::default();
+        app.transition_to(InputMode::Navigate);
+    }
+}
+
+fn submit_composer(app: &mut App) {
+    let lines = app.textarea.lines().to_vec();
+    let is_empty = lines.iter().all(|l| l.trim().is_empty());
+
+    if let Some(editing) = app.editing_entry.take() {
+        let selection_hint = (editing.file_path.clone(), editing.start_line);
+        let mut new_lines: Vec<String> = Vec::new();
+        if !is_empty {
+            let heading_time = if editing.timestamp_prefix.is_empty() {
+                Local::now().format("%H:%M:%S").to_string()
+            } else if let Some((prefix, _)) = split_timestamp_line(&editing.timestamp_prefix) {
+                prefix
+                    .trim()
+                    .trim_start_matches('[')
+                    .trim_end_matches(']')
+                    .to_string()
+            } else {
+                Local::now().format("%H:%M:%S").to_string()
+            };
+
+            new_lines.push(format!("## [{heading_time}]"));
+            new_lines.extend(lines);
         }
-    } else if key_match(&key, &app.config.keybindings.composer.outdent) {
-        if indent_or_outdent_list_line(&mut app.textarea, false) {
-            app.composer_dirty = true;
+
+        if let Err(e) = storage::replace_entry_lines(
+            &editing.file_path,
+            editing.start_line,
+            editing.end_line,
+            &new_lines,
+        ) {
+            eprintln!("Error updating entry: {}", e);
         }
-    } else if key_match(&key, &app.config.keybindings.composer.newline) {
-        insert_newline_with_auto_indent(&mut app.textarea);
-        app.composer_dirty = true;
-    } else if key_match(&key, &app.config.keybindings.composer.submit) {
-        let lines = app.textarea.lines().to_vec();
-        let is_empty = lines.iter().all(|l| l.trim().is_empty());
-
-        if let Some(editing) = app.editing_entry.take() {
-            let selection_hint = (editing.file_path.clone(), editing.start_line);
-            let mut new_lines: Vec<String> = Vec::new();
-            if !is_empty {
-                let heading_time = if editing.timestamp_prefix.is_empty() {
-                    Local::now().format("%H:%M:%S").to_string()
-                } else if let Some((prefix, _)) = split_timestamp_line(&editing.timestamp_prefix) {
-                    prefix
-                        .trim()
-                        .trim_start_matches('[')
-                        .trim_end_matches(']')
-                        .to_string()
-                } else {
-                    Local::now().format("%H:%M:%S").to_string()
-                };
-
-                new_lines.push(format!("## [{heading_time}]"));
-                new_lines.extend(lines);
-            }
-
-            if let Err(e) = storage::replace_entry_lines(
-                &editing.file_path,
-                editing.start_line,
-                editing.end_line,
-                &new_lines,
-            ) {
-                eprintln!("Error updating entry: {}", e);
-            }
-            if editing.from_search {
-                if let Some(query) = editing.search_query.as_deref() {
-                    app.last_search_query = Some(query.to_string());
-                    refresh_search_results(app, query);
-                    if let Some(i) = app.logs.iter().position(|e| {
-                        e.file_path == selection_hint.0 && e.line_number == selection_hint.1
-                    }) {
-                        app.logs_state.select(Some(i));
-                    }
-                } else {
-                    app.last_search_query = None;
-                    app.update_logs();
+        if editing.from_search {
+            if let Some(query) = editing.search_query.as_deref() {
+                app.last_search_query = Some(query.to_string());
+                refresh_search_results(app, query);
+                if let Some(i) = app.logs.iter().position(|e| {
+                    e.file_path == selection_hint.0 && e.line_number == selection_hint.1
+                }) {
+                    app.logs_state.select(Some(i));
                 }
             } else {
+                app.last_search_query = None;
                 app.update_logs();
             }
         } else {
-            let input = lines.join("\n");
-            if !input.trim().is_empty() {
-                if let Err(e) = storage::append_entry(&app.config.data.log_path, &input) {
-                    eprintln!("Error saving: {}", e);
-                }
-                app.update_logs();
-            }
+            app.update_logs();
         }
+    } else {
+        let input = lines.join("\n");
+        if !input.trim().is_empty() {
+            if let Err(e) = storage::append_entry(&app.config.data.log_path, &input) {
+                eprintln!("Error saving: {}", e);
+            }
+            app.update_logs();
+        }
+    }
 
-        // Reset textarea
-        app.textarea = tui_textarea::TextArea::default();
-        app.composer_dirty = false;
-        app.transition_to(InputMode::Navigate);
-    } else if app.textarea.input(key) {
+    // Reset textarea
+    app.textarea = tui_textarea::TextArea::default();
+    app.composer_dirty = false;
+    app.transition_to(InputMode::Navigate);
+}
+
+fn handle_editor_insert(app: &mut App, key: event::KeyEvent) {
+    if key.code == KeyCode::Char('u') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        if delete_to_line_start(app) {
+            app.set_yank_buffer(app.textarea.yank_text());
+            app.mark_insert_modified();
+            app.composer_dirty = true;
+        }
+        return;
+    }
+
+    if key.code == KeyCode::Char('w') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        if delete_previous_word(app) {
+            app.set_yank_buffer(app.textarea.yank_text());
+            app.mark_insert_modified();
+            app.composer_dirty = true;
+        }
+        return;
+    }
+
+    if key_match(&key, &app.config.keybindings.composer.indent) {
+        let modified = if indent_or_outdent_list_line(&mut app.textarea, true) {
+            true
+        } else {
+            app.textarea.insert_tab()
+        };
+        if modified {
+            app.mark_insert_modified();
+            app.composer_dirty = true;
+        }
+        return;
+    }
+
+    if key_match(&key, &app.config.keybindings.composer.outdent) {
+        if indent_or_outdent_list_line(&mut app.textarea, false) {
+            app.mark_insert_modified();
+            app.composer_dirty = true;
+        }
+        return;
+    }
+
+    if key_match(&key, &app.config.keybindings.composer.newline) {
+        insert_newline_with_auto_indent(&mut app.textarea);
+        app.mark_insert_modified();
+        app.composer_dirty = true;
+        return;
+    }
+
+    if app.textarea.input(key) {
+        app.mark_insert_modified();
         app.composer_dirty = true;
     }
+}
+
+fn handle_editor_normal(app: &mut App, key: event::KeyEvent) {
+    if handle_pending_command(app, key) {
+        return;
+    }
+
+    if let KeyCode::Char(c) = key.code
+        && c.is_ascii_digit()
+        && c != '0'
+        && !key.modifiers.contains(KeyModifiers::CONTROL)
+    {
+        let digit = c.to_digit(10).unwrap_or(0) as usize;
+        app.pending_count = app.pending_count.saturating_mul(10).saturating_add(digit);
+        return;
+    }
+
+    if key.code == KeyCode::Char('r') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        if app.editor_redo() {
+            app.composer_dirty = true;
+            clamp_cursor_for_normal(app);
+        }
+        return;
+    }
+
+    if key.code == KeyCode::Char('u') && !key.modifiers.contains(KeyModifiers::CONTROL) {
+        if app.editor_undo() {
+            app.composer_dirty = true;
+            clamp_cursor_for_normal(app);
+        }
+        return;
+    }
+
+    match key.code {
+        KeyCode::Char('i') => {
+            enter_insert_mode(app);
+        }
+        KeyCode::Char('a') => {
+            move_cursor_after(app);
+            enter_insert_mode(app);
+        }
+        KeyCode::Char('o') => {
+            app.begin_insert_group();
+            open_line_below(app);
+            app.mark_insert_modified();
+            set_insert_mode(app);
+        }
+        KeyCode::Char('O') => {
+            app.begin_insert_group();
+            open_line_above(app);
+            app.mark_insert_modified();
+            set_insert_mode(app);
+        }
+        KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            enter_visual_mode(app, VisualKind::Block);
+        }
+        KeyCode::Char('v') => {
+            enter_visual_mode(app, VisualKind::Char);
+        }
+        KeyCode::Char('V') => {
+            enter_visual_mode(app, VisualKind::Line);
+        }
+        KeyCode::Char('h') => {
+            let count = take_count_or_one(app);
+            move_left(app, count);
+        }
+        KeyCode::Char('j') => {
+            let count = take_count_or_one(app);
+            move_down(app, count);
+        }
+        KeyCode::Char('k') => {
+            let count = take_count_or_one(app);
+            move_up(app, count);
+        }
+        KeyCode::Char('l') => {
+            let count = take_count_or_one(app);
+            move_right(app, count);
+        }
+        KeyCode::Char('w') => {
+            let count = take_count_or_one(app);
+            move_word(app, WordMotion::NextStart, false, count);
+        }
+        KeyCode::Char('W') => {
+            let count = take_count_or_one(app);
+            move_word(app, WordMotion::NextStart, true, count);
+        }
+        KeyCode::Char('b') => {
+            let count = take_count_or_one(app);
+            move_word(app, WordMotion::PrevStart, false, count);
+        }
+        KeyCode::Char('B') => {
+            let count = take_count_or_one(app);
+            move_word(app, WordMotion::PrevStart, true, count);
+        }
+        KeyCode::Char('e') => {
+            let count = take_count_or_one(app);
+            move_word(app, WordMotion::End, false, count);
+        }
+        KeyCode::Char('E') => {
+            let count = take_count_or_one(app);
+            move_word(app, WordMotion::End, true, count);
+        }
+        KeyCode::Char('0') => {
+            app.pending_count = 0;
+            move_line_start(app);
+        }
+        KeyCode::Char('$') => {
+            app.pending_count = 0;
+            move_line_end(app);
+        }
+        KeyCode::Char('g') => {
+            app.pending_command = Some(PendingEditCommand::GoToTop);
+        }
+        KeyCode::Char('G') => {
+            app.pending_count = 0;
+            move_doc_end(app);
+        }
+        KeyCode::Char('d') => {
+            app.pending_command = Some(PendingEditCommand::Delete);
+        }
+        KeyCode::Char('y') => {
+            app.pending_command = Some(PendingEditCommand::Yank);
+        }
+        KeyCode::Char('c') => {
+            app.pending_command = Some(PendingEditCommand::Change);
+        }
+        KeyCode::Char('x') => {
+            let count = take_count_or_one(app);
+            if let Some(obj) = resolve_char_object(app, count) {
+                apply_operator(app, Operator::Delete, obj);
+            }
+        }
+        KeyCode::Char('p') => {
+            let count = take_count_or_one(app);
+            if !app.yank_buffer.is_empty() {
+                app.record_undo_snapshot();
+                app.textarea.set_yank_text(app.yank_buffer.clone());
+                for _ in 0..count {
+                    let _ = app.textarea.paste();
+                }
+                app.composer_dirty = true;
+                clamp_cursor_for_normal(app);
+            }
+        }
+        KeyCode::Char('s') => {
+            let count = take_count_or_one(app);
+            if let Some(obj) = resolve_char_object(app, count) {
+                apply_operator(app, Operator::Change, obj);
+            }
+        }
+        KeyCode::Char('r') => {
+            app.pending_command = Some(PendingEditCommand::Replace);
+        }
+        _ => {
+            app.pending_count = 0;
+            app.pending_command = None;
+        }
+    }
+}
+
+fn handle_editor_visual(app: &mut App, key: event::KeyEvent, kind: VisualKind) {
+    if let Some(PendingEditCommand::GoToTop) = app.pending_command {
+        if key.code == KeyCode::Char('g') {
+            app.pending_command = None;
+            app.pending_count = 0;
+            move_doc_start(app);
+            return;
+        }
+        app.pending_command = None;
+    }
+
+    if let KeyCode::Char(c) = key.code
+        && c.is_ascii_digit()
+        && c != '0'
+        && !key.modifiers.contains(KeyModifiers::CONTROL)
+    {
+        let digit = c.to_digit(10).unwrap_or(0) as usize;
+        app.pending_count = app.pending_count.saturating_mul(10).saturating_add(digit);
+        return;
+    }
+
+    match key.code {
+        KeyCode::Char('h') => {
+            let count = take_count_or_one(app);
+            move_left(app, count);
+        }
+        KeyCode::Char('j') => {
+            let count = take_count_or_one(app);
+            move_down(app, count);
+        }
+        KeyCode::Char('k') => {
+            let count = take_count_or_one(app);
+            move_up(app, count);
+        }
+        KeyCode::Char('l') => {
+            let count = take_count_or_one(app);
+            move_right(app, count);
+        }
+        KeyCode::Char('w') => {
+            let count = take_count_or_one(app);
+            move_word(app, WordMotion::NextStart, false, count);
+        }
+        KeyCode::Char('W') => {
+            let count = take_count_or_one(app);
+            move_word(app, WordMotion::NextStart, true, count);
+        }
+        KeyCode::Char('b') => {
+            let count = take_count_or_one(app);
+            move_word(app, WordMotion::PrevStart, false, count);
+        }
+        KeyCode::Char('B') => {
+            let count = take_count_or_one(app);
+            move_word(app, WordMotion::PrevStart, true, count);
+        }
+        KeyCode::Char('e') => {
+            let count = take_count_or_one(app);
+            move_word(app, WordMotion::End, false, count);
+        }
+        KeyCode::Char('E') => {
+            let count = take_count_or_one(app);
+            move_word(app, WordMotion::End, true, count);
+        }
+        KeyCode::Char('0') => {
+            app.pending_count = 0;
+            move_line_start(app);
+        }
+        KeyCode::Char('$') => {
+            app.pending_count = 0;
+            move_line_end(app);
+        }
+        KeyCode::Char('g') => {
+            app.pending_command = Some(PendingEditCommand::GoToTop);
+        }
+        KeyCode::Char('G') => {
+            app.pending_count = 0;
+            move_doc_end(app);
+        }
+        KeyCode::Char('y') => {
+            if let Some(obj) = resolve_visual_text_object(app, kind) {
+                apply_operator(app, Operator::Yank, obj);
+            }
+            exit_visual_mode(app);
+        }
+        KeyCode::Char('d') | KeyCode::Char('x') => {
+            if let Some(obj) = resolve_visual_text_object(app, kind) {
+                apply_operator(app, Operator::Delete, obj);
+            }
+            exit_visual_mode(app);
+        }
+        _ => {}
+    }
+}
+
+fn enter_insert_mode(app: &mut App) {
+    app.begin_insert_group();
+    set_insert_mode(app);
+}
+
+fn set_insert_mode(app: &mut App) {
+    app.editor_mode = EditorMode::Insert;
+    app.pending_command = None;
+    app.pending_count = 0;
+    app.visual_anchor = None;
+}
+
+fn exit_insert_mode(app: &mut App) {
+    app.commit_insert_group();
+    app.editor_mode = EditorMode::Normal;
+    app.pending_command = None;
+    app.pending_count = 0;
+    app.visual_anchor = None;
+    clamp_cursor_for_normal(app);
+}
+
+fn enter_visual_mode(app: &mut App, kind: VisualKind) {
+    app.editor_mode = EditorMode::Visual(kind);
+    app.visual_anchor = Some(app.textarea.cursor());
+    app.pending_command = None;
+    app.pending_count = 0;
+    let kind_label = match kind {
+        VisualKind::Char => "CHAR",
+        VisualKind::Line => "LINE",
+        VisualKind::Block => "BLOCK",
+    };
+    app.show_visual_hint(format!(
+        "VISUAL ({kind_label}): hjkl/w b e extend · y yank · d delete · Esc normal · ? help"
+    ));
+}
+
+fn exit_visual_mode(app: &mut App) {
+    app.editor_mode = EditorMode::Normal;
+    app.visual_anchor = None;
+    app.pending_command = None;
+    app.pending_count = 0;
+    clamp_cursor_for_normal(app);
+}
+
+fn handle_pending_command(app: &mut App, key: event::KeyEvent) -> bool {
+    let Some(pending) = app.pending_command else {
+        return false;
+    };
+
+    match pending {
+        PendingEditCommand::Delete => {
+            if key.code == KeyCode::Char('d') {
+                let count = take_count_or_one(app);
+                if let Some(obj) = resolve_line_object(app, count) {
+                    apply_operator(app, Operator::Delete, obj);
+                }
+                app.pending_command = None;
+                return true;
+            }
+        }
+        PendingEditCommand::Yank => {
+            if key.code == KeyCode::Char('y') {
+                let count = take_count_or_one(app);
+                if let Some(obj) = resolve_line_object(app, count) {
+                    apply_operator(app, Operator::Yank, obj);
+                }
+                app.pending_command = None;
+                return true;
+            }
+        }
+        PendingEditCommand::Change => {
+            if key.code == KeyCode::Char('c') {
+                let count = take_count_or_one(app);
+                if let Some(obj) = resolve_line_object(app, count) {
+                    apply_operator(app, Operator::Change, obj);
+                }
+                app.pending_command = None;
+                return true;
+            }
+        }
+        PendingEditCommand::GoToTop => {
+            if key.code == KeyCode::Char('g') {
+                app.pending_command = None;
+                app.pending_count = 0;
+                move_doc_start(app);
+                return true;
+            }
+        }
+        PendingEditCommand::Replace => {
+            if let KeyCode::Char(c) = key.code
+                && !key.modifiers.contains(KeyModifiers::CONTROL)
+                && !key.modifiers.contains(KeyModifiers::ALT)
+            {
+                app.pending_command = None;
+                app.pending_count = 0;
+                app.record_undo_snapshot();
+                if replace_char(app, c) {
+                    app.composer_dirty = true;
+                }
+                return true;
+            }
+        }
+    }
+
+    app.pending_command = None;
+    app.pending_count = 0;
+    false
+}
+
+fn take_count_or_one(app: &mut App) -> usize {
+    let count = if app.pending_count > 0 {
+        app.pending_count
+    } else {
+        1
+    };
+    app.pending_count = 0;
+    count
+}
+
+#[derive(Clone, Copy)]
+enum WordMotion {
+    NextStart,
+    PrevStart,
+    End,
+}
+
+#[derive(Clone, Copy)]
+enum Operator {
+    Delete,
+    Yank,
+    Change,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+enum TextObjectKind {
+    Char,
+    Word,
+    Line,
+}
+
+#[derive(Clone, Copy)]
+enum TextObject {
+    Range {
+        kind: TextObjectKind,
+        start: (usize, usize),
+        end: (usize, usize),
+    },
+    Block {
+        start: (usize, usize),
+        end: (usize, usize),
+    },
+}
+
+fn move_left(app: &mut App, count: usize) {
+    let (row, col) = app.textarea.cursor();
+    let new_col = col.saturating_sub(count);
+    app.textarea
+        .move_cursor(CursorMove::Jump(row as u16, new_col as u16));
+}
+
+fn move_right(app: &mut App, count: usize) {
+    let (row, col) = app.textarea.cursor();
+    let line_len = current_line_len(app, row);
+    if line_len == 0 {
+        return;
+    }
+    let max_col = line_len.saturating_sub(1);
+    let new_col = col.saturating_add(count).min(max_col);
+    app.textarea
+        .move_cursor(CursorMove::Jump(row as u16, new_col as u16));
+}
+
+fn move_up(app: &mut App, count: usize) {
+    for _ in 0..count {
+        app.textarea.move_cursor(CursorMove::Up);
+    }
+    clamp_cursor_for_normal(app);
+}
+
+fn move_down(app: &mut App, count: usize) {
+    for _ in 0..count {
+        app.textarea.move_cursor(CursorMove::Down);
+    }
+    clamp_cursor_for_normal(app);
+}
+
+fn move_word(app: &mut App, motion: WordMotion, big_word: bool, count: usize) {
+    let lines = app.textarea.lines();
+    if lines.is_empty() {
+        return;
+    }
+
+    let mut pos = app.textarea.cursor();
+    for _ in 0..count {
+        let next = match motion {
+            WordMotion::NextStart => next_word_start(lines, pos, big_word),
+            WordMotion::PrevStart => prev_word_start(lines, pos, big_word),
+            WordMotion::End => word_end(lines, pos, big_word),
+        };
+        pos = next;
+    }
+
+    app.textarea
+        .move_cursor(CursorMove::Jump(pos.0 as u16, pos.1 as u16));
+    if matches!(app.editor_mode, EditorMode::Normal | EditorMode::Visual(_)) {
+        clamp_cursor_for_normal(app);
+    }
+}
+
+fn apply_operator(app: &mut App, operator: Operator, object: TextObject) {
+    let text = text_object_text(app, object);
+    let mut line_removed = false;
+    let mut line_start_row = None;
+
+    let modified = match operator {
+        Operator::Yank => {
+            app.set_yank_buffer(text);
+            return;
+        }
+        Operator::Delete => {
+            app.record_undo_snapshot();
+            match object {
+                TextObject::Range { kind, start, end } => {
+                    line_start_row = Some(start.0);
+                    line_removed = line_object_removed(kind, start, end);
+                    delete_range_object(app, kind, start, end)
+                }
+                TextObject::Block { start, end } => {
+                    delete_block_object(app, start, end)
+                }
+            }
+        }
+        Operator::Change => {
+            app.begin_insert_group();
+            match object {
+                TextObject::Range { kind, start, end } => {
+                    line_start_row = Some(start.0);
+                    line_removed = line_object_removed(kind, start, end);
+                    delete_range_object(app, kind, start, end)
+                }
+                TextObject::Block { start, end } => {
+                    delete_block_object(app, start, end)
+                }
+            }
+        }
+    };
+
+    match operator {
+        Operator::Delete => {
+            app.set_yank_buffer(text);
+            if modified {
+                app.composer_dirty = true;
+            }
+            if let Some(row) = line_start_row
+                && object_is_line(object) {
+                    place_cursor_after_line_delete(app, row);
+            } else {
+                clamp_cursor_for_normal(app);
+            }
+        }
+        Operator::Change => {
+            app.set_yank_buffer(text);
+            if object_is_line(object) {
+                if line_removed {
+                    if let Some(row) = line_start_row {
+                        insert_empty_line_at(app, row);
+                    }
+                } else if let Some(row) = line_start_row {
+                    app.textarea
+                        .move_cursor(CursorMove::Jump(row as u16, 0));
+                }
+            }
+            if modified {
+                app.mark_insert_modified();
+                app.composer_dirty = true;
+            }
+            set_insert_mode(app);
+        }
+        Operator::Yank => {}
+    }
+}
+
+fn object_is_line(object: TextObject) -> bool {
+    matches!(
+        object,
+        TextObject::Range {
+            kind: TextObjectKind::Line,
+            ..
+        }
+    )
+}
+
+fn line_object_removed(kind: TextObjectKind, start: (usize, usize), end: (usize, usize)) -> bool {
+    kind == TextObjectKind::Line && (end.0 > start.0 || start.0 > 0)
+}
+
+fn resolve_line_object(app: &App, count: usize) -> Option<TextObject> {
+    let lines = app.textarea.lines();
+    if lines.is_empty() {
+        return None;
+    }
+    let (row, _) = app.textarea.cursor();
+    let start_row = row.min(lines.len().saturating_sub(1));
+    let end_row_exclusive = start_row.saturating_add(count);
+    let (start, end) = line_object_range(lines, start_row, end_row_exclusive);
+    Some(TextObject::Range {
+        kind: TextObjectKind::Line,
+        start,
+        end,
+    })
+}
+
+fn resolve_char_object(app: &App, count: usize) -> Option<TextObject> {
+    let lines = app.textarea.lines();
+    if lines.is_empty() {
+        return None;
+    }
+    let (row, col) = app.textarea.cursor();
+    let len = line_len(lines, row);
+    if len == 0 || col >= len {
+        return None;
+    }
+    let end = advance_pos_by_chars(lines, (row, col), count);
+    if end == (row, col) {
+        return None;
+    }
+    Some(TextObject::Range {
+        kind: TextObjectKind::Char,
+        start: (row, col),
+        end,
+    })
+}
+
+fn resolve_visual_text_object(app: &App, kind: VisualKind) -> Option<TextObject> {
+    let lines = app.textarea.lines();
+    let anchor = app.visual_anchor?;
+    let cursor = app.textarea.cursor();
+
+    match kind {
+        VisualKind::Char => {
+            let (mut start, mut end) = ordered_positions(anchor, cursor);
+            let start_len = line_len(lines, start.0);
+            let end_len = line_len(lines, end.0);
+            if start_len == 0 && end_len == 0 {
+                return None;
+            }
+            start.1 = start.1.min(start_len);
+            let end_col = end.1.saturating_add(1).min(end_len);
+            end = (end.0, end_col);
+            Some(TextObject::Range {
+                kind: TextObjectKind::Char,
+                start,
+                end,
+            })
+        }
+        VisualKind::Line => {
+            let start_row = anchor.0.min(cursor.0);
+            let end_row_exclusive = anchor.0.max(cursor.0).saturating_add(1);
+            let (start, end) = line_object_range(lines, start_row, end_row_exclusive);
+            Some(TextObject::Range {
+                kind: TextObjectKind::Line,
+                start,
+                end,
+            })
+        }
+        VisualKind::Block => {
+            let row_start = anchor.0.min(cursor.0);
+            let row_end = anchor.0.max(cursor.0);
+            let col_start = anchor.1.min(cursor.1);
+            let col_end = anchor.1.max(cursor.1);
+            Some(TextObject::Block {
+                start: (row_start, col_start),
+                end: (row_end, col_end),
+            })
+        }
+    }
+}
+
+fn text_object_text(app: &App, object: TextObject) -> String {
+    let lines = app.textarea.lines();
+    match object {
+        TextObject::Range { start, end, .. } => extract_range_text(lines, start, end),
+        TextObject::Block { start, end } => collect_block_object_text(lines, start, end),
+    }
+}
+
+fn line_object_range(
+    lines: &[String],
+    start_row: usize,
+    end_row_exclusive: usize,
+) -> ((usize, usize), (usize, usize)) {
+    let line_count = lines.len();
+    if line_count == 0 {
+        return ((0, 0), (0, 0));
+    }
+    let start_row = start_row.min(line_count - 1);
+    if end_row_exclusive < line_count {
+        ((start_row, 0), (end_row_exclusive, 0))
+    } else {
+        let last_row = line_count - 1;
+        let end_col = line_len(lines, last_row);
+        ((start_row, 0), (last_row, end_col))
+    }
+}
+
+fn extract_range_text(lines: &[String], start: (usize, usize), end: (usize, usize)) -> String {
+    if lines.is_empty() {
+        return String::new();
+    }
+    if start.0 == end.0 {
+        let line = lines.get(start.0).map(|s| s.as_str()).unwrap_or("");
+        return slice_by_char(line, start.1, end.1);
+    }
+
+    let mut out = String::new();
+    let first = lines.get(start.0).map(|s| s.as_str()).unwrap_or("");
+    out.push_str(&slice_by_char(first, start.1, first.chars().count()));
+    out.push('\n');
+    for row in (start.0 + 1)..end.0 {
+        let line = lines.get(row).map(|s| s.as_str()).unwrap_or("");
+        out.push_str(line);
+        out.push('\n');
+    }
+    let last = lines.get(end.0).map(|s| s.as_str()).unwrap_or("");
+    out.push_str(&slice_by_char(last, 0, end.1));
+    out
+}
+
+fn delete_range_object(
+    app: &mut App,
+    kind: TextObjectKind,
+    start: (usize, usize),
+    end: (usize, usize),
+) -> bool {
+    let lines = app.textarea.lines();
+    let (delete_start, delete_end) = if kind == TextObjectKind::Line && start.0 == end.0 && start.0 > 0
+    {
+        let prev_len = line_len(lines, start.0.saturating_sub(1));
+        ((start.0 - 1, prev_len), end)
+    } else {
+        (start, end)
+    };
+
+    delete_range(app, delete_start, delete_end)
+}
+
+fn delete_range(app: &mut App, start: (usize, usize), end: (usize, usize)) -> bool {
+    if start == end {
+        return false;
+    }
+    let (start, end) = if start <= end { (start, end) } else { (end, start) };
+    app.textarea
+        .move_cursor(CursorMove::Jump(start.0 as u16, start.1 as u16));
+    app.textarea.start_selection();
+    app.textarea
+        .move_cursor(CursorMove::Jump(end.0 as u16, end.1 as u16));
+    app.textarea.cut()
+}
+
+fn place_cursor_after_line_delete(app: &mut App, deleted_row: usize) {
+    let lines = app.textarea.lines();
+    if lines.is_empty() {
+        app.textarea.move_cursor(CursorMove::Jump(0, 0));
+        return;
+    }
+    let target_row = if deleted_row < lines.len() {
+        deleted_row
+    } else {
+        lines.len().saturating_sub(1)
+    };
+    let col = first_non_blank_col(lines.get(target_row).map(|s| s.as_str()).unwrap_or(""));
+    app.textarea
+        .move_cursor(CursorMove::Jump(target_row as u16, col as u16));
+}
+
+fn first_non_blank_col(line: &str) -> usize {
+    for (idx, ch) in line.chars().enumerate() {
+        if !ch.is_whitespace() {
+            return idx;
+        }
+    }
+    0
+}
+
+fn insert_empty_line_at(app: &mut App, row: usize) {
+    let lines = app.textarea.lines();
+    if lines.is_empty() {
+        app.textarea.insert_newline();
+        app.textarea.move_cursor(CursorMove::Jump(0, 0));
+        return;
+    }
+
+    if row < lines.len() {
+        app.textarea
+            .move_cursor(CursorMove::Jump(row as u16, 0));
+        app.textarea.insert_newline();
+        app.textarea
+            .move_cursor(CursorMove::Jump(row as u16, 0));
+    } else {
+        let last_row = lines.len().saturating_sub(1);
+        let end_col = line_len(lines, last_row);
+        app.textarea
+            .move_cursor(CursorMove::Jump(last_row as u16, end_col as u16));
+        app.textarea.insert_newline();
+        app.textarea
+            .move_cursor(CursorMove::Jump((last_row + 1) as u16, 0));
+    }
+}
+
+fn ordered_positions(
+    a: (usize, usize),
+    b: (usize, usize),
+) -> ((usize, usize), (usize, usize)) {
+    if a <= b {
+        (a, b)
+    } else {
+        (b, a)
+    }
+}
+
+fn move_line_start(app: &mut App) {
+    let (row, _) = app.textarea.cursor();
+    app.textarea.move_cursor(CursorMove::Jump(row as u16, 0));
+}
+
+fn move_line_end(app: &mut App) {
+    let (row, _) = app.textarea.cursor();
+    let line_len = current_line_len(app, row);
+    let new_col = if line_len == 0 {
+        0
+    } else {
+        line_len.saturating_sub(1)
+    };
+    app.textarea
+        .move_cursor(CursorMove::Jump(row as u16, new_col as u16));
+}
+
+fn move_doc_start(app: &mut App) {
+    app.textarea.move_cursor(CursorMove::Jump(0, 0));
+}
+
+fn move_doc_end(app: &mut App) {
+    let last_row = app.textarea.lines().len().saturating_sub(1);
+    let line_len = current_line_len(app, last_row);
+    let new_col = if line_len == 0 {
+        0
+    } else {
+        line_len.saturating_sub(1)
+    };
+    app.textarea
+        .move_cursor(CursorMove::Jump(last_row as u16, new_col as u16));
+}
+
+fn move_cursor_after(app: &mut App) {
+    let (row, col) = app.textarea.cursor();
+    let line_len = current_line_len(app, row);
+    if line_len == 0 {
+        return;
+    }
+    let new_col = col.saturating_add(1).min(line_len);
+    app.textarea
+        .move_cursor(CursorMove::Jump(row as u16, new_col as u16));
+}
+
+fn clamp_cursor_for_normal(app: &mut App) {
+    let (row, col) = app.textarea.cursor();
+    let line_len = current_line_len(app, row);
+    let max_col = if line_len == 0 {
+        0
+    } else {
+        line_len.saturating_sub(1)
+    };
+    if col > max_col {
+        app.textarea
+            .move_cursor(CursorMove::Jump(row as u16, max_col as u16));
+    }
+}
+
+fn current_line_len(app: &App, row: usize) -> usize {
+    app.textarea
+        .lines()
+        .get(row)
+        .map(|line| line.chars().count())
+        .unwrap_or(0)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WordKind {
+    Whitespace,
+    Word,
+    Punct,
+}
+
+fn is_word_char(ch: char) -> bool {
+    ch == '_' || ch.is_alphanumeric()
+}
+
+fn char_kind(ch: char, big_word: bool) -> WordKind {
+    if ch.is_whitespace() {
+        WordKind::Whitespace
+    } else if big_word || is_word_char(ch) {
+        WordKind::Word
+    } else {
+        WordKind::Punct
+    }
+}
+
+fn line_len(lines: &[String], row: usize) -> usize {
+    lines
+        .get(row)
+        .map(|line| line.chars().count())
+        .unwrap_or(0)
+}
+
+fn char_at(lines: &[String], row: usize, col: usize) -> Option<char> {
+    lines.get(row).and_then(|line| line.chars().nth(col))
+}
+
+fn kind_at(lines: &[String], pos: (usize, usize), big_word: bool) -> WordKind {
+    char_at(lines, pos.0, pos.1)
+        .map(|ch| char_kind(ch, big_word))
+        .unwrap_or(WordKind::Whitespace)
+}
+
+fn next_pos(lines: &[String], pos: (usize, usize)) -> Option<(usize, usize)> {
+    if lines.is_empty() {
+        return None;
+    }
+    let (row, col) = pos;
+    let len = line_len(lines, row);
+    if len == 0 {
+        if row + 1 < lines.len() {
+            return Some((row + 1, 0));
+        }
+        return None;
+    }
+    if col + 1 < len {
+        Some((row, col + 1))
+    } else if row + 1 < lines.len() {
+        Some((row + 1, 0))
+    } else {
+        None
+    }
+}
+
+fn prev_pos(lines: &[String], pos: (usize, usize)) -> Option<(usize, usize)> {
+    if lines.is_empty() {
+        return None;
+    }
+    let (row, col) = pos;
+    let len = line_len(lines, row);
+    if len == 0 {
+        if row == 0 {
+            return None;
+        }
+        let prev_len = line_len(lines, row - 1);
+        let prev_col = if prev_len == 0 { 0 } else { prev_len - 1 };
+        return Some((row - 1, prev_col));
+    }
+    if col > 0 {
+        Some((row, col - 1))
+    } else if row > 0 {
+        let prev_len = line_len(lines, row - 1);
+        let prev_col = if prev_len == 0 { 0 } else { prev_len - 1 };
+        Some((row - 1, prev_col))
+    } else {
+        None
+    }
+}
+
+fn next_word_start(lines: &[String], pos: (usize, usize), big_word: bool) -> (usize, usize) {
+    let Some(mut cur) = next_pos(lines, pos) else {
+        return pos;
+    };
+
+    let mut kind = kind_at(lines, cur, big_word);
+
+    if kind == WordKind::Whitespace {
+        while kind == WordKind::Whitespace {
+            let Some(next) = next_pos(lines, cur) else {
+                return cur;
+            };
+            cur = next;
+            kind = kind_at(lines, cur, big_word);
+        }
+        return cur;
+    }
+
+    loop {
+        let Some(next) = next_pos(lines, cur) else {
+            return cur;
+        };
+        let next_kind = kind_at(lines, next, big_word);
+        if next_kind == kind {
+            cur = next;
+            continue;
+        }
+        cur = next;
+        kind = next_kind;
+        break;
+    }
+
+    while kind == WordKind::Whitespace {
+        let Some(next) = next_pos(lines, cur) else {
+            return cur;
+        };
+        cur = next;
+        kind = kind_at(lines, cur, big_word);
+    }
+    cur
+}
+
+fn prev_word_start(lines: &[String], pos: (usize, usize), big_word: bool) -> (usize, usize) {
+    let Some(mut cur) = prev_pos(lines, pos) else {
+        return pos;
+    };
+
+    let mut kind = kind_at(lines, cur, big_word);
+    while kind == WordKind::Whitespace {
+        let Some(prev) = prev_pos(lines, cur) else {
+            return cur;
+        };
+        cur = prev;
+        kind = kind_at(lines, cur, big_word);
+    }
+
+    loop {
+        let Some(prev) = prev_pos(lines, cur) else {
+            return cur;
+        };
+        let prev_kind = kind_at(lines, prev, big_word);
+        if prev_kind == kind {
+            cur = prev;
+            continue;
+        }
+        return cur;
+    }
+}
+
+fn word_end(lines: &[String], pos: (usize, usize), big_word: bool) -> (usize, usize) {
+    let mut cur = pos;
+    let mut kind = kind_at(lines, cur, big_word);
+
+    if kind == WordKind::Whitespace {
+        while kind == WordKind::Whitespace {
+            let Some(next) = next_pos(lines, cur) else {
+                return cur;
+            };
+            cur = next;
+            kind = kind_at(lines, cur, big_word);
+        }
+    }
+
+    loop {
+        let Some(next) = next_pos(lines, cur) else {
+            return cur;
+        };
+        let next_kind = kind_at(lines, next, big_word);
+        if next_kind == kind {
+            cur = next;
+            continue;
+        }
+        return cur;
+    }
+}
+
+fn open_line_below(app: &mut App) {
+    let (row, _) = app.textarea.cursor();
+    let line_len = current_line_len(app, row);
+    app.textarea
+        .move_cursor(CursorMove::Jump(row as u16, line_len as u16));
+    insert_newline_with_auto_indent(&mut app.textarea);
+}
+
+fn open_line_above(app: &mut App) {
+    let (row, _) = app.textarea.cursor();
+    let current_line = app
+        .textarea
+        .lines()
+        .get(row)
+        .map(|s| s.as_str())
+        .unwrap_or("");
+    let prefix = list_continuation_prefix(current_line);
+    app.textarea.move_cursor(CursorMove::Jump(row as u16, 0));
+    app.textarea.insert_newline();
+    app.textarea.move_cursor(CursorMove::Up);
+    if !prefix.is_empty() {
+        app.textarea.insert_str(prefix);
+    }
+}
+
+fn delete_to_line_start(app: &mut App) -> bool {
+    let (row, col) = app.textarea.cursor();
+    if col == 0 {
+        return false;
+    }
+    app.textarea.move_cursor(CursorMove::Jump(row as u16, 0));
+    app.textarea.delete_str(col)
+}
+
+fn delete_previous_word(app: &mut App) -> bool {
+    let (_, col) = app.textarea.cursor();
+    if col == 0 {
+        return false;
+    }
+    app.textarea.delete_word()
+}
+
+fn replace_char(app: &mut App, c: char) -> bool {
+    let (row, col) = app.textarea.cursor();
+    let line_len = current_line_len(app, row);
+    if line_len == 0 || col >= line_len {
+        return false;
+    }
+    if !app.textarea.delete_str(1) {
+        return false;
+    }
+    app.set_yank_buffer(app.textarea.yank_text());
+    app.textarea.insert_char(c);
+    let new_col = col.min(current_line_len(app, row).saturating_sub(1));
+    app.textarea
+        .move_cursor(CursorMove::Jump(row as u16, new_col as u16));
+    true
+}
+
+fn advance_pos_by_chars(
+    lines: &[String],
+    start: (usize, usize),
+    count: usize,
+) -> (usize, usize) {
+    let mut row = start.0;
+    let mut col = start.1;
+    let mut remaining = count;
+    let line_count = lines.len();
+    if line_count == 0 {
+        return start;
+    }
+
+    while remaining > 0 {
+        let len = line_len(lines, row);
+        if len == 0 {
+            if row + 1 >= line_count {
+                return (row, col);
+            }
+            row += 1;
+            col = 0;
+            remaining = remaining.saturating_sub(1);
+            continue;
+        }
+
+        if col < len {
+            let available = len.saturating_sub(col);
+            if remaining <= available {
+                col = col.saturating_add(remaining);
+                break;
+            }
+            col = len;
+            remaining = remaining.saturating_sub(available);
+        }
+
+        if remaining == 0 {
+            break;
+        }
+        if row + 1 >= line_count {
+            break;
+        }
+        row += 1;
+        col = 0;
+        remaining = remaining.saturating_sub(1);
+    }
+
+    (row, col)
+}
+
+fn collect_block_object_text(
+    lines: &[String],
+    start: (usize, usize),
+    end: (usize, usize),
+) -> String {
+    let row_start = start.0.min(end.0);
+    let row_end = start.0.max(end.0);
+    let col_start = start.1.min(end.1);
+    let col_end = start.1.max(end.1).saturating_add(1);
+
+    let mut blocks = Vec::new();
+    for row in row_start..=row_end {
+        let line = lines.get(row).map(|s| s.as_str()).unwrap_or("");
+        let line_len = line.chars().count();
+        if line_len == 0 || col_start >= line_len {
+            blocks.push(String::new());
+            continue;
+        }
+        let end = col_end.min(line_len);
+        blocks.push(slice_by_char(line, col_start, end));
+    }
+
+    blocks.join("\n")
+}
+
+fn delete_block_object(
+    app: &mut App,
+    start: (usize, usize),
+    end: (usize, usize),
+) -> bool {
+    let row_start = start.0.min(end.0);
+    let row_end = start.0.max(end.0);
+    let col_start = start.1.min(end.1);
+    let col_end = start.1.max(end.1).saturating_add(1);
+
+    let mut modified = false;
+    for row in row_start..=row_end {
+        let line = app.textarea.lines().get(row).map(|s| s.as_str()).unwrap_or("");
+        let line_len = line.chars().count();
+        if line_len == 0 || col_start >= line_len {
+            continue;
+        }
+        let end = col_end.min(line_len);
+        let delete_len = end.saturating_sub(col_start);
+        if delete_len == 0 {
+            continue;
+        }
+        app.textarea
+            .move_cursor(CursorMove::Jump(row as u16, col_start as u16));
+        if app.textarea.delete_str(delete_len) {
+            modified = true;
+        }
+    }
+
+    app.textarea
+        .move_cursor(CursorMove::Jump(row_start as u16, col_start as u16));
+    clamp_cursor_for_normal(app);
+    modified
+}
+
+fn slice_by_char(s: &str, start: usize, end: usize) -> String {
+    if start >= end {
+        return String::new();
+    }
+    s.chars()
+        .skip(start)
+        .take(end.saturating_sub(start))
+        .collect()
 }
 
 fn composer_has_unsaved_input(app: &App) -> bool {
@@ -1045,5 +2326,135 @@ fn handle_path_popup(app: &mut App, key: event::KeyEvent) {
     } else if key_match(&key, &app.config.keybindings.popup.cancel) {
         app.show_path_popup = false;
         app.transition_to(InputMode::Navigate);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    fn make_editing_app(lines: &[&str]) -> App<'static> {
+        let mut app = App::new();
+        app.textarea = tui_textarea::TextArea::from(lines.iter().copied());
+        app.input_mode = InputMode::Editing;
+        app.reset_editor_state();
+        app
+    }
+
+    fn send_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
+        handle_editing_mode(app, KeyEvent::new(code, modifiers));
+    }
+
+    fn send_char(app: &mut App, ch: char) {
+        send_key(app, KeyCode::Char(ch), KeyModifiers::NONE);
+    }
+
+    #[test]
+    fn insert_groups_undo_redo() {
+        let mut app = make_editing_app(&["hello"]);
+        app.textarea.move_cursor(CursorMove::End);
+
+        send_char(&mut app, 'i');
+        send_char(&mut app, 'x');
+        send_char(&mut app, 'y');
+        send_key(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+
+        assert_eq!(app.textarea.lines(), ["helloxy"]);
+
+        send_char(&mut app, 'u');
+        assert_eq!(app.textarea.lines(), ["hello"]);
+
+        send_key(&mut app, KeyCode::Char('r'), KeyModifiers::CONTROL);
+        assert_eq!(app.textarea.lines(), ["helloxy"]);
+    }
+
+    #[test]
+    fn count_moves_cursor_down() {
+        let mut app = make_editing_app(&["a", "b", "c", "d"]);
+        send_char(&mut app, '2');
+        send_char(&mut app, 'j');
+        assert_eq!(app.textarea.cursor().0, 2);
+    }
+
+    #[test]
+    fn count_delete_lines() {
+        let mut app = make_editing_app(&["a", "b", "c", "d"]);
+        send_char(&mut app, '2');
+        send_char(&mut app, 'd');
+        send_char(&mut app, 'd');
+        assert_eq!(app.textarea.lines(), ["c", "d"]);
+    }
+
+    #[test]
+    fn delete_line_removes_newline_and_moves_cursor() {
+        let mut app = make_editing_app(&["first", "  second", "third"]);
+        send_char(&mut app, 'd');
+        send_char(&mut app, 'd');
+        assert_eq!(app.textarea.lines(), ["  second", "third"]);
+        assert_eq!(app.textarea.cursor(), (0, 2));
+    }
+
+    #[test]
+    fn delete_last_line_moves_to_previous() {
+        let mut app = make_editing_app(&["first", "second"]);
+        send_char(&mut app, 'j');
+        send_char(&mut app, 'd');
+        send_char(&mut app, 'd');
+        assert_eq!(app.textarea.lines(), ["first"]);
+        assert_eq!(app.textarea.cursor(), (0, 0));
+    }
+
+    #[test]
+    fn visual_charwise_yank() {
+        let mut app = make_editing_app(&["abcd"]);
+        send_char(&mut app, 'v');
+        send_char(&mut app, 'l');
+        send_char(&mut app, 'l');
+        send_char(&mut app, 'y');
+        assert_eq!(app.editor_mode, EditorMode::Normal);
+        assert_eq!(app.yank_buffer, "abc");
+    }
+
+    #[test]
+    fn delete_char_and_paste() {
+        let mut app = make_editing_app(&["abc"]);
+        send_char(&mut app, 'x');
+        assert_eq!(app.textarea.lines(), ["bc"]);
+        send_char(&mut app, 'p');
+        assert_eq!(app.textarea.lines(), ["abc"]);
+    }
+
+    #[test]
+    fn visual_word_motion_w_b_e() {
+        let mut app = make_editing_app(&["one two"]);
+        send_char(&mut app, 'v');
+        send_char(&mut app, 'w');
+        assert_eq!(app.textarea.cursor(), (0, 4));
+        send_char(&mut app, 'b');
+        assert_eq!(app.textarea.cursor(), (0, 0));
+        send_char(&mut app, 'e');
+        assert_eq!(app.textarea.cursor(), (0, 2));
+    }
+
+    #[test]
+    fn visual_word_motion_wbe_counts() {
+        let mut app = make_editing_app(&["one two three four"]);
+        send_char(&mut app, 'v');
+        send_char(&mut app, '2');
+        send_char(&mut app, 'w');
+        assert_eq!(app.textarea.cursor(), (0, 8));
+    }
+
+    #[test]
+    fn visual_word_motion_w_b_e_big_word() {
+        let mut app = make_editing_app(&["foo,bar baz"]);
+        send_char(&mut app, 'v');
+        send_char(&mut app, 'W');
+        assert_eq!(app.textarea.cursor(), (0, 8));
+        send_char(&mut app, 'B');
+        assert_eq!(app.textarea.cursor(), (0, 0));
+        send_char(&mut app, 'E');
+        assert_eq!(app.textarea.cursor(), (0, 6));
     }
 }
