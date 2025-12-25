@@ -151,8 +151,6 @@ fn handle_day_rollover(app: &mut App) {
         return;
     }
 
-    let prev_date = app.active_date.clone();
-
     // Policy: Pomodoro timers are in-memory only. On day change, running timers are reset.
     app.active_date = today;
     app.pomodoro_end = None;
@@ -170,29 +168,21 @@ fn handle_day_rollover(app: &mut App) {
 
     let mut carried_tasks = 0usize;
     if !storage::is_carryover_done(&app.config.data.log_path).unwrap_or(false)
-        && let Ok(blocks) =
-            storage::get_carryover_blocks_for_date(&app.config.data.log_path, &prev_date)
+        && let Ok(tasks) =
+            storage::collect_carryover_tasks(&app.config.data.log_path, &app.active_date)
         {
-            for block in blocks {
-                carried_tasks += block.task_lines.len();
-                let mut content = format!("⤴ Carryover from {}", block.from_date);
-                if let Some(ctx) = block.context.as_deref() {
-                    content.push_str(&format!("\n> {}", ctx));
-                }
-                if !block.task_lines.is_empty() {
-                    content.push('\n');
-                    content.push_str(&block.task_lines.join("\n"));
-                }
-                let _ = storage::append_entry(&app.config.data.log_path, &content);
+            for task in &tasks {
+                let _ = storage::append_entry(&app.config.data.log_path, task);
             }
+            carried_tasks = tasks.len();
             let _ = storage::mark_carryover_done(&app.config.data.log_path);
         }
 
     app.update_logs();
     if carried_tasks > 0 {
         app.toast(format!(
-            "New day detected: carried over {} unfinished tasks from {}.",
-            carried_tasks, prev_date
+            "New day detected: carried over {} unfinished tasks.",
+            carried_tasks
         ));
     } else {
         app.toast("New day detected: refreshed logs/tasks and reset pomodoro.");
@@ -331,27 +321,29 @@ fn handle_mood_popup(app: &mut App, key: event::KeyEvent) {
         app.show_mood_popup = false;
     } else if key_match(&key, &app.config.keybindings.popup.cancel) {
         app.show_mood_popup = false;
-        app.transition_to(InputMode::Editing);
+        app.transition_to(InputMode::Navigate);
     }
 }
 
 fn check_carryover(app: &mut App) {
     let already_checked = storage::is_carryover_done(&app.config.data.log_path).unwrap_or(false);
     if !already_checked {
-        if let Ok(todos) = storage::get_last_file_pending_todos(&app.config.data.log_path) {
+        if let Ok(todos) =
+            storage::collect_carryover_tasks(&app.config.data.log_path, &app.active_date)
+        {
             if !todos.is_empty() {
                 app.pending_todos = todos;
                 app.show_todo_popup = true;
             } else {
-                app.transition_to(InputMode::Editing);
+                app.transition_to(InputMode::Navigate);
                 let _ = storage::mark_carryover_done(&app.config.data.log_path);
             }
         } else {
-            app.transition_to(InputMode::Editing);
+            app.transition_to(InputMode::Navigate);
             let _ = storage::mark_carryover_done(&app.config.data.log_path);
         }
     } else {
-        app.transition_to(InputMode::Editing);
+        app.transition_to(InputMode::Navigate);
     }
 }
 
@@ -362,11 +354,11 @@ fn handle_todo_popup(app: &mut App, key: event::KeyEvent) {
         }
         app.update_logs();
         app.show_todo_popup = false;
-        app.transition_to(InputMode::Editing);
+        app.transition_to(InputMode::Navigate);
         let _ = storage::mark_carryover_done(&app.config.data.log_path);
     } else if key_match(&key, &app.config.keybindings.popup.cancel) {
         app.show_todo_popup = false;
-        app.transition_to(InputMode::Editing);
+        app.transition_to(InputMode::Navigate);
         let _ = storage::mark_carryover_done(&app.config.data.log_path);
     }
 }

@@ -184,11 +184,13 @@ impl<'a> App<'a> {
             let already_checked =
                 storage::is_carryover_done(&config.data.log_path).unwrap_or(false);
             if !already_checked
-                && let Ok(todos) = storage::get_last_file_pending_todos(&config.data.log_path)
-                    && !todos.is_empty() {
-                        pending_todos = todos;
-                        show_todo_popup = true;
-                    }
+                && let Ok(todos) =
+                    storage::collect_carryover_tasks(&config.data.log_path, &active_date)
+                && !todos.is_empty()
+            {
+                pending_todos = todos;
+                show_todo_popup = true;
+            }
         }
 
         let input_mode = InputMode::Navigate;
@@ -830,6 +832,12 @@ mod tests {
         ];
         app.logs_state.select(Some(0));
         app
+    }
+
+    #[test]
+    fn app_starts_in_navigate_mode() {
+        let app = App::new();
+        assert!(matches!(app.input_mode, InputMode::Navigate));
     }
 
     #[test]

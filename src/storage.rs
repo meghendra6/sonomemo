@@ -147,90 +147,6 @@ pub fn read_today_tasks(log_path: &Path) -> io::Result<Vec<TaskItem>> {
     Ok(parse_task_content(&content, &path_str))
 }
 
-#[derive(Clone)]
-pub struct CarryoverBlock {
-    pub from_date: String,
-    pub context: Option<String>,
-    pub task_lines: Vec<String>,
-}
-
-pub fn get_carryover_blocks_for_date(
-    log_path: &Path,
-    from_date: &str,
-) -> io::Result<Vec<CarryoverBlock>> {
-    ensure_log_dir(log_path)?;
-    let path = get_file_path_for_date(log_path, from_date);
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-
-    let content = fs::read_to_string(&path)?;
-    let mut blocks: Vec<CarryoverBlock> = Vec::new();
-
-    let mut current_context: Option<String> = None;
-    let mut current_tasks: Vec<String> = Vec::new();
-    let mut has_started = false;
-
-    for raw_line in content.lines() {
-        if raw_line.contains("System: Carryover Checked") {
-            continue;
-        }
-
-        let is_new_entry = is_timestamped_line(raw_line) || !has_started;
-        if is_new_entry {
-            if !current_tasks.is_empty() {
-                blocks.push(CarryoverBlock {
-                    from_date: from_date.to_string(),
-                    context: current_context.take(),
-                    task_lines: std::mem::take(&mut current_tasks),
-                });
-            } else {
-                current_context = None;
-            }
-            has_started = true;
-        }
-
-        let s = strip_timestamp_prefix(raw_line);
-
-        let trimmed_start = s.trim_start();
-        if current_context.is_none()
-            && !trimmed_start.is_empty()
-            && !trimmed_start.starts_with("- [ ]")
-            && !trimmed_start.starts_with("- [x]")
-            && !trimmed_start.starts_with("- [X]")
-        {
-            current_context = Some(trimmed_start.to_string());
-        }
-
-        let (indent_bytes, indent_spaces) = parse_indent(s);
-        let after_indent = &s[indent_bytes..];
-        if let Some(text) = after_indent.strip_prefix("- [ ] ") {
-            let level = indent_spaces.div_ceil(2);
-            let indent = "  ".repeat(level);
-
-            let (base, tomato_count) = strip_trailing_tomatoes(text);
-            let base = base.trim();
-
-            let mut line = format!("{indent}- [ ] {base} ⟦{from_date}⟧");
-            if tomato_count > 0 {
-                line.push(' ');
-                line.push_str(&"🍅".repeat(tomato_count));
-            }
-            current_tasks.push(line);
-        }
-    }
-
-    if !current_tasks.is_empty() {
-        blocks.push(CarryoverBlock {
-            from_date: from_date.to_string(),
-            context: current_context.take(),
-            task_lines: current_tasks,
-        });
-    }
-
-    Ok(blocks)
-}
-
 pub fn search_entries(log_path: &Path, query: &str) -> io::Result<Vec<LogEntry>> {
     ensure_log_dir(log_path)?;
     let dir = PathBuf::from(log_path);
@@ -406,6 +322,8 @@ struct ParsedTaskLine {
     identity: String,
     carryover_from: Option<String>,
     is_done: bool,
+    indent_level: usize,
+    base_text: String,
 }
 
 fn parse_task_line(line: &str) -> Option<ParsedTaskLine> {
@@ -414,7 +332,7 @@ fn parse_task_line(line: &str) -> Option<ParsedTaskLine> {
     }
 
     let s = strip_timestamp_prefix(line);
-    let (indent_bytes, _) = parse_indent(s);
+    let (indent_bytes, indent_spaces) = parse_indent(s);
     let s = &s[indent_bytes..];
 
     let (is_done, text) = if let Some(text) = s.strip_prefix("- [ ] ") {
@@ -429,12 +347,15 @@ fn parse_task_line(line: &str) -> Option<ParsedTaskLine> {
 
     let (text, _) = strip_trailing_tomatoes(text);
     let text = text.trim();
-    let (identity, carryover_from) = task_identity_from_text(text);
+    let (base_text, carryover_from) = strip_carryover_marker(text);
+    let identity = normalize_task_text(&base_text);
 
     Some(ParsedTaskLine {
         identity,
         carryover_from,
         is_done,
+        indent_level: indent_spaces.div_ceil(2),
+        base_text,
     })
 }
 
@@ -655,43 +576,79 @@ pub fn append_tomato_to_line(file_path: &str, line_number: usize) -> io::Result<
     Ok(())
 }
 
-/// Returns pending (uncompleted) todos from the most recent log file before today.
-pub fn get_last_file_pending_todos(log_path: &Path) -> io::Result<Vec<String>> {
+pub fn collect_carryover_tasks(log_path: &Path, today: &str) -> io::Result<Vec<String>> {
     ensure_log_dir(log_path)?;
-    let dir = PathBuf::from(log_path);
-    let today = Local::now().format("%Y-%m-%d").to_string();
+    let today_date = NaiveDate::parse_from_str(today, "%Y-%m-%d")
+        .unwrap_or_else(|_| Local::now().date_naive());
+    let mut resolved: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut carryover = Vec::new();
 
-    if let Ok(entries) = fs::read_dir(dir) {
-        let mut file_paths = Vec::new();
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|s| s.to_str()) == Some("md") {
-                // Exclude today's file (only look at past days)
-                if let Some(stem) = path.file_stem().and_then(|s| s.to_str())
-                    && stem != today {
-                        file_paths.push(path);
-                    }
+    let today_path = get_file_path_for_date(log_path, today);
+    if today_path.exists() {
+        let content = fs::read_to_string(&today_path)?;
+        for line in content.lines() {
+            if let Some(parsed) = parse_task_line(line) {
+                resolved.insert(parsed.identity);
             }
         }
-        // Sort by date
-        file_paths.sort();
+    }
 
-        // Check only the most recent (last) file
-        if let Some(last_path) = file_paths.last() {
-            let mut todos = Vec::new();
-            if let Ok(content) = fs::read_to_string(last_path) {
-                for line in content.lines() {
-                    if line.contains("- [ ]") {
-                        // Strip timestamp "[HH:MM:SS] " prefix
-                        let clean_line = strip_timestamp_prefix(line);
-                        todos.push(clean_line.trim().to_string());
+    let dates = get_available_log_dates(log_path)?;
+    for date in dates.iter().rev() {
+        if *date >= today_date {
+            continue;
+        }
+        let date_str = date.format("%Y-%m-%d").to_string();
+        let path = get_file_path_for_date(log_path, &date_str);
+        if !path.exists() {
+            continue;
+        }
+        let content = fs::read_to_string(&path)?;
+        let mut ordered: Vec<String> = Vec::new();
+        let mut states: std::collections::HashMap<String, ParsedTaskLine> =
+            std::collections::HashMap::new();
+
+        for line in content.lines() {
+            let Some(parsed) = parse_task_line(line) else {
+                continue;
+            };
+            let identity = parsed.identity.clone();
+            match states.entry(identity.clone()) {
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    ordered.push(identity);
+                    entry.insert(parsed);
+                }
+                std::collections::hash_map::Entry::Occupied(mut entry) => {
+                    if parsed.is_done {
+                        entry.get_mut().is_done = true;
                     }
                 }
             }
-            return Ok(todos);
+        }
+
+        for identity in ordered {
+            let Some(parsed) = states.get(&identity) else {
+                continue;
+            };
+            if resolved.contains(&parsed.identity) {
+                continue;
+            }
+            resolved.insert(parsed.identity.clone());
+            if parsed.is_done {
+                continue;
+            }
+            let base_text = parsed.base_text.trim();
+            if base_text.is_empty() {
+                continue;
+            }
+            let indent = "  ".repeat(parsed.indent_level);
+            carryover.push(format!(
+                "{indent}- [ ] {base_text} ⟦{date_str}⟧"
+            ));
         }
     }
-    Ok(Vec::new())
+
+    Ok(carryover)
 }
 
 /// Returns all tags found in log files with their occurrence counts, sorted by frequency.
@@ -983,5 +940,51 @@ mod tests {
         assert_eq!(completed, 2);
         let day3 = fs::read_to_string(dir.join("2024-03-03.md")).expect("read day3");
         assert_eq!(day3.lines().next().unwrap_or(""), "- [ ] Future Task");
+    }
+
+    #[test]
+    fn collect_carryover_tasks_across_gap_days() {
+        let dir = temp_log_dir();
+        write_log(&dir, "2024-12-22", "- [ ] Alpha Task\n- [x] Done Task\n");
+        write_log(&dir, "2024-12-20", "- [ ] Beta Task\n");
+
+        let tasks = collect_carryover_tasks(&dir, "2024-12-25").expect("collect");
+
+        assert_eq!(tasks.len(), 2);
+        assert_eq!(tasks[0], "- [ ] Alpha Task ⟦2024-12-22⟧");
+        assert_eq!(tasks[1], "- [ ] Beta Task ⟦2024-12-20⟧");
+    }
+
+    #[test]
+    fn collect_carryover_tasks_deduplicates_latest() {
+        let dir = temp_log_dir();
+        write_log(&dir, "2024-12-21", "- [ ] Same Task\n");
+        write_log(&dir, "2024-12-22", "- [ ] Same Task\n");
+
+        let tasks = collect_carryover_tasks(&dir, "2024-12-25").expect("collect");
+
+        assert_eq!(tasks, vec!["- [ ] Same Task ⟦2024-12-22⟧"]);
+    }
+
+    #[test]
+    fn collect_carryover_tasks_skips_completed_in_later_date() {
+        let dir = temp_log_dir();
+        write_log(&dir, "2024-12-21", "- [ ] Finish Task\n");
+        write_log(&dir, "2024-12-22", "- [x] Finish Task\n");
+
+        let tasks = collect_carryover_tasks(&dir, "2024-12-25").expect("collect");
+
+        assert!(tasks.is_empty());
+    }
+
+    #[test]
+    fn collect_carryover_tasks_skips_tasks_already_today() {
+        let dir = temp_log_dir();
+        write_log(&dir, "2024-12-22", "- [ ] Today Task\n");
+        write_log(&dir, "2024-12-25", "- [ ] Today Task\n");
+
+        let tasks = collect_carryover_tasks(&dir, "2024-12-25").expect("collect");
+
+        assert!(tasks.is_empty());
     }
 }
