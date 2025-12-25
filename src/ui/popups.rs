@@ -1,7 +1,7 @@
 use super::components::centered_rect;
 use crate::app::App;
 use crate::config::ThemePreset;
-use crate::models::Mood;
+use crate::models::{EditorMode, InputMode, Mood, VisualKind};
 use crate::ui::color_parser::parse_color;
 use crate::ui::theme::ThemeTokens;
 use chrono::Local;
@@ -260,6 +260,13 @@ pub fn render_path_popup(f: &mut Frame, app: &App) {
 
 pub fn render_help_popup(f: &mut Frame, app: &App) {
     let tokens = ThemeTokens::from_theme(&app.config.theme);
+    if app.input_mode == InputMode::Editing
+        && let EditorMode::Visual(kind) = app.editor_mode
+    {
+        render_visual_help_popup(f, app, kind, &tokens);
+        return;
+    }
+
     let block = Block::default()
         .title(" Help ")
         .borders(Borders::ALL)
@@ -367,6 +374,119 @@ pub fn render_help_popup(f: &mut Frame, app: &App) {
         Paragraph::new("Esc / ?: close").style(muted_style),
         inner_area[1],
     );
+}
+
+fn render_visual_help_popup(
+    f: &mut Frame,
+    _app: &App,
+    kind: VisualKind,
+    tokens: &ThemeTokens,
+) {
+    let block = Block::default()
+        .title(" Visual Help ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(tokens.ui_border_default));
+    let area = centered_rect(70, 45, f.area());
+    f.render_widget(Clear, area);
+    f.render_widget(block, area);
+
+    let lines = visual_help_lines(kind, tokens);
+
+    let inner_area = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .margin(2)
+        .split(area);
+
+    let muted_style = Style::default().fg(tokens.ui_muted);
+    f.render_widget(Paragraph::new(lines), inner_area[0]);
+    f.render_widget(
+        Paragraph::new("Esc / ?: close").style(muted_style),
+        inner_area[1],
+    );
+}
+
+fn visual_help_lines(kind: VisualKind, tokens: &ThemeTokens) -> Vec<Line<'static>> {
+    let label_style = Style::default().fg(tokens.ui_muted);
+    let key_style = Style::default()
+        .fg(tokens.ui_accent)
+        .add_modifier(Modifier::BOLD);
+
+    let kind_label = match kind {
+        VisualKind::Char => "CHAR",
+        VisualKind::Line => "LINE",
+        VisualKind::Block => "BLOCK",
+    };
+
+    vec![
+        Line::from(vec![
+            Span::styled("VISUAL (", label_style),
+            Span::styled(kind_label, key_style),
+            Span::styled(")", label_style),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Motion", label_style),
+            Span::raw("  "),
+            Span::styled("h j k l", key_style),
+            Span::raw("  "),
+            Span::styled("w b e", key_style),
+            Span::raw("  "),
+            Span::styled("W B E", key_style),
+        ]),
+        Line::from(vec![
+            Span::styled("Actions", label_style),
+            Span::raw(" "),
+            Span::styled("y", key_style),
+            Span::styled(" yank", label_style),
+            Span::raw("  "),
+            Span::styled("d/x", key_style),
+            Span::styled(" delete", label_style),
+        ]),
+        Line::from(vec![
+            Span::styled("Mode", label_style),
+            Span::raw("   "),
+            Span::styled("Esc", key_style),
+            Span::styled(" normal", label_style),
+            Span::raw("  "),
+            Span::styled("?", key_style),
+            Span::styled(" help", label_style),
+        ]),
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::visual_help_lines;
+    use crate::config::Theme;
+    use crate::models::VisualKind;
+    use crate::ui::theme::ThemeTokens;
+
+    fn line_to_string(line: &ratatui::text::Line<'_>) -> String {
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>()
+    }
+
+    #[test]
+    fn visual_help_includes_motion_and_actions() {
+        let tokens = ThemeTokens::from_theme(&Theme::default());
+        let lines = visual_help_lines(VisualKind::Block, &tokens);
+        let combined = lines
+            .iter()
+            .map(line_to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(combined.contains("VISUAL (BLOCK)"));
+        assert!(combined.contains("h j k l"));
+        assert!(combined.contains("w b e"));
+        assert!(combined.contains("W B E"));
+        assert!(combined.contains("y yank"));
+        assert!(combined.contains("d/x delete"));
+        assert!(combined.contains("Esc normal"));
+    }
 }
 
 pub fn render_discard_popup(f: &mut Frame, _app: &App) {
