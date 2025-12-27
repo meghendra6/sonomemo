@@ -60,8 +60,8 @@ pub fn handle_editing_mode(app: &mut App, key: KeyEvent) {
         && !key.modifiers.contains(KeyModifiers::CONTROL)
     {
         match app.editor_mode {
-            EditorMode::Insert => crate::exit_insert_mode(app),
-            EditorMode::Visual(_) => crate::exit_visual_mode(app),
+            EditorMode::Insert => crate::editor::vim::exit_insert_mode(app),
+            EditorMode::Visual(_) => crate::editor::vim::exit_visual_mode(app),
             EditorMode::Normal => {}
         }
         return;
@@ -83,9 +83,9 @@ pub fn handle_editing_mode(app: &mut App, key: KeyEvent) {
     }
 
     match app.editor_mode {
-        EditorMode::Normal => crate::handle_editor_normal(app, key),
-        EditorMode::Insert => crate::handle_editor_insert(app, key),
-        EditorMode::Visual(kind) => crate::handle_editor_visual(app, key, kind),
+        EditorMode::Normal => crate::editor::vim::handle_editor_normal(app, key),
+        EditorMode::Insert => crate::editor::vim::handle_editor_insert(app, key),
+        EditorMode::Visual(kind) => crate::editor::vim::handle_editor_visual(app, key, kind),
     }
 }
 
