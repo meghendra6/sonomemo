@@ -1,3 +1,5 @@
+//! Main entrypoint: terminal lifecycle, run loop, UI draw, and delegation.
+
 use crossterm::{
     event::{
         self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
