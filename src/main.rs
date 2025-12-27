@@ -17,6 +17,7 @@ use std::{error::Error, io};
 mod actions;
 mod app;
 mod config;
+mod editor;
 mod input;
 mod models;
 mod runtime;
@@ -24,9 +25,7 @@ mod storage;
 mod ui;
 
 use crate::config::key_match;
-use crate::models::split_timestamp_line;
 use app::{App, PendingEditCommand};
-use chrono::{Duration, Local};
 use models::{EditorMode, InputMode, VisualKind};
 use tui_textarea::CursorMove;
 
@@ -113,164 +112,9 @@ fn handle_key_input(app: &mut App, key: event::KeyEvent) {
 
     match app.input_mode {
         InputMode::Navigate => input::navigate::handle_normal_mode(app, key),
-        InputMode::Editing => handle_editing_mode(app, key),
+        InputMode::Editing => input::editing::handle_editing_mode(app, key),
         InputMode::Search => input::search::handle_search_mode(app, key),
     }
-}
-
-fn handle_editing_mode(app: &mut App, key: event::KeyEvent) {
-    if key_match(&key, &app.config.keybindings.composer.submit) {
-        app.commit_insert_group();
-        submit_composer(app);
-        return;
-    }
-
-    // Simple mode: no Vim keybindings, just forward to textarea
-    if !app.is_vim_mode() {
-        if key_match(&key, &app.config.keybindings.composer.clear) {
-            app.textarea = tui_textarea::TextArea::default();
-            app.transition_to(InputMode::Editing);
-            return;
-        }
-
-        if key_match(&key, &app.config.keybindings.composer.cancel) {
-            cancel_composer(app);
-            return;
-        }
-
-        if key_match(&key, &app.config.keybindings.composer.indent) {
-            indent_or_outdent_list_line(&mut app.textarea, true);
-            return;
-        }
-
-        if key_match(&key, &app.config.keybindings.composer.outdent) {
-            indent_or_outdent_list_line(&mut app.textarea, false);
-            return;
-        }
-
-        if key_match(&key, &app.config.keybindings.composer.newline) {
-            insert_newline_with_auto_indent(&mut app.textarea);
-            return;
-        }
-
-        // Forward all other keys to textarea
-        if app.textarea.input(key) {
-            app.composer_dirty = true;
-        }
-        return;
-    }
-
-    // Vim mode handling below
-    if app.visual_hint_active && matches!(app.editor_mode, EditorMode::Visual(_)) {
-        app.clear_visual_hint();
-    }
-
-    if matches!(app.editor_mode, EditorMode::Insert | EditorMode::Visual(_))
-        && key.code == KeyCode::Esc
-        && !key.modifiers.contains(KeyModifiers::CONTROL)
-    {
-        match app.editor_mode {
-            EditorMode::Insert => exit_insert_mode(app),
-            EditorMode::Visual(_) => exit_visual_mode(app),
-            EditorMode::Normal => {}
-        }
-        return;
-    }
-
-    if key_match(&key, &app.config.keybindings.composer.clear) {
-        app.commit_insert_group();
-        app.textarea = tui_textarea::TextArea::default();
-        app.transition_to(InputMode::Editing);
-        return;
-    }
-
-    if key_match(&key, &app.config.keybindings.composer.cancel)
-        && matches!(app.editor_mode, EditorMode::Normal)
-    {
-        app.commit_insert_group();
-        cancel_composer(app);
-        return;
-    }
-
-    match app.editor_mode {
-        EditorMode::Normal => handle_editor_normal(app, key),
-        EditorMode::Insert => handle_editor_insert(app, key),
-        EditorMode::Visual(kind) => handle_editor_visual(app, key, kind),
-    }
-}
-
-fn cancel_composer(app: &mut App) {
-    if composer_has_unsaved_input(app) {
-        app.show_discard_popup = true;
-    } else {
-        app.editing_entry = None;
-        app.textarea = tui_textarea::TextArea::default();
-        app.transition_to(InputMode::Navigate);
-    }
-}
-
-fn submit_composer(app: &mut App) {
-    let lines = app.textarea.lines().to_vec();
-    let is_empty = lines.iter().all(|l| l.trim().is_empty());
-
-    if let Some(editing) = app.editing_entry.take() {
-        let selection_hint = (editing.file_path.clone(), editing.start_line);
-        let mut new_lines: Vec<String> = Vec::new();
-        if !is_empty {
-            let heading_time = if editing.timestamp_prefix.is_empty() {
-                Local::now().format("%H:%M:%S").to_string()
-            } else if let Some((prefix, _)) = split_timestamp_line(&editing.timestamp_prefix) {
-                prefix
-                    .trim()
-                    .trim_start_matches('[')
-                    .trim_end_matches(']')
-                    .to_string()
-            } else {
-                Local::now().format("%H:%M:%S").to_string()
-            };
-
-            new_lines.push(format!("## [{heading_time}]"));
-            new_lines.extend(lines);
-        }
-
-        if let Err(e) = storage::replace_entry_lines(
-            &editing.file_path,
-            editing.start_line,
-            editing.end_line,
-            &new_lines,
-        ) {
-            eprintln!("Error updating entry: {}", e);
-        }
-        if editing.from_search {
-            if let Some(query) = editing.search_query.as_deref() {
-                app.last_search_query = Some(query.to_string());
-                refresh_search_results(app, query);
-                if let Some(i) = app.logs.iter().position(|e| {
-                    e.file_path == selection_hint.0 && e.line_number == selection_hint.1
-                }) {
-                    app.logs_state.select(Some(i));
-                }
-            } else {
-                app.last_search_query = None;
-                app.update_logs();
-            }
-        } else {
-            app.update_logs();
-        }
-    } else {
-        let input = lines.join("\n");
-        if !input.trim().is_empty() {
-            if let Err(e) = storage::append_entry(&app.config.data.log_path, &input) {
-                eprintln!("Error saving: {}", e);
-            }
-            app.update_logs();
-        }
-    }
-
-    // Reset textarea
-    app.textarea = tui_textarea::TextArea::default();
-    app.composer_dirty = false;
-    app.transition_to(InputMode::Navigate);
 }
 
 fn handle_editor_insert(app: &mut App, key: event::KeyEvent) {
@@ -293,7 +137,7 @@ fn handle_editor_insert(app: &mut App, key: event::KeyEvent) {
     }
 
     if key_match(&key, &app.config.keybindings.composer.indent) {
-        let modified = if indent_or_outdent_list_line(&mut app.textarea, true) {
+        let modified = if editor::markdown::indent_or_outdent_list_line(&mut app.textarea, true) {
             true
         } else {
             app.textarea.insert_tab()
@@ -306,7 +150,7 @@ fn handle_editor_insert(app: &mut App, key: event::KeyEvent) {
     }
 
     if key_match(&key, &app.config.keybindings.composer.outdent) {
-        if indent_or_outdent_list_line(&mut app.textarea, false) {
+        if editor::markdown::indent_or_outdent_list_line(&mut app.textarea, false) {
             app.mark_insert_modified();
             app.composer_dirty = true;
         }
@@ -314,7 +158,7 @@ fn handle_editor_insert(app: &mut App, key: event::KeyEvent) {
     }
 
     if key_match(&key, &app.config.keybindings.composer.newline) {
-        insert_newline_with_auto_indent(&mut app.textarea);
+        editor::markdown::insert_newline_with_auto_indent(&mut app.textarea);
         app.mark_insert_modified();
         app.composer_dirty = true;
         return;
@@ -1545,7 +1389,7 @@ fn open_line_below(app: &mut App) {
     let line_len = current_line_len(app, row);
     app.textarea
         .move_cursor(CursorMove::Jump(row as u16, line_len as u16));
-    insert_newline_with_auto_indent(&mut app.textarea);
+    editor::markdown::insert_newline_with_auto_indent(&mut app.textarea);
 }
 
 fn open_line_above(app: &mut App) {
@@ -1556,7 +1400,7 @@ fn open_line_above(app: &mut App) {
         .get(row)
         .map(|s| s.as_str())
         .unwrap_or("");
-    let prefix = list_continuation_prefix(current_line);
+    let prefix = editor::markdown::list_continuation_prefix(current_line);
     app.textarea.move_cursor(CursorMove::Jump(row as u16, 0));
     app.textarea.insert_newline();
     app.textarea.move_cursor(CursorMove::Up);
@@ -1765,191 +1609,6 @@ fn slice_by_char(s: &str, start: usize, end: usize) -> String {
         .collect()
 }
 
-fn composer_has_unsaved_input(app: &App) -> bool {
-    if app.editing_entry.is_some() {
-        return true;
-    }
-    app.textarea
-        .lines()
-        .iter()
-        .any(|line| !line.trim().is_empty())
-}
-
-fn refresh_search_results(app: &mut App, query: &str) {
-    if let Ok(results) = storage::search_entries(&app.config.data.log_path, query) {
-        app.logs = results;
-        app.is_search_result = true;
-        app.logs_state.select(Some(0));
-        app.search_highlight_query = Some(query.to_string());
-        app.search_highlight_ready_at = Some(Local::now() + Duration::milliseconds(150));
-    }
-}
-
-fn insert_newline_with_auto_indent(textarea: &mut tui_textarea::TextArea) {
-    let (row, _) = textarea.cursor();
-    let current_line = textarea.lines().get(row).map(|s| s.as_str()).unwrap_or("");
-
-    let prefix = list_continuation_prefix(current_line);
-    textarea.insert_newline();
-    if !prefix.is_empty() {
-        textarea.insert_str(prefix);
-    }
-}
-
-fn indent_or_outdent_list_line(textarea: &mut tui_textarea::TextArea, indent: bool) -> bool {
-    let (row, col) = textarea.cursor();
-    let current_line = textarea.lines().get(row).map(|s| s.as_str()).unwrap_or("");
-
-    if !is_list_line(current_line) {
-        return false;
-    }
-
-    if indent {
-        textarea.move_cursor(CursorMove::Jump(row as u16, 0));
-        textarea.insert_str("  ");
-        textarea.move_cursor(CursorMove::Jump(row as u16, (col + 2) as u16));
-        true
-    } else {
-        let remove = leading_outdent_chars(current_line);
-        if remove == 0 {
-            return true;
-        }
-
-        textarea.move_cursor(CursorMove::Jump(row as u16, 0));
-        for _ in 0..remove {
-            let _ = textarea.delete_next_char();
-        }
-        textarea.move_cursor(CursorMove::Jump(
-            row as u16,
-            col.saturating_sub(remove) as u16,
-        ));
-        true
-    }
-}
-
-fn is_list_line(line: &str) -> bool {
-    let (_, rest) = parse_indent_level(line);
-    checkbox_marker(rest).is_some()
-        || bullet_marker(rest).is_some()
-        || ordered_list_next_marker(rest).is_some()
-}
-
-fn leading_outdent_chars(line: &str) -> usize {
-    let bytes = line.as_bytes();
-    if bytes.is_empty() {
-        return 0;
-    }
-    if bytes[0] == b'\t' {
-        return 1;
-    }
-    if bytes.len() >= 2 && bytes[0] == b' ' && bytes[1] == b' ' {
-        return 2;
-    }
-    if bytes[0] == b' ' {
-        return 1;
-    }
-    0
-}
-
-fn list_continuation_prefix(line: &str) -> String {
-    let (indent_level, rest) = parse_indent_level(line);
-    let indent = "  ".repeat(indent_level);
-
-    if let Some((_marker, content)) = checkbox_marker(rest) {
-        if content.trim().is_empty() {
-            return indent;
-        }
-        // Always continue checklists as unchecked by default.
-        return format!("{indent}- [ ] ");
-    }
-
-    if let Some((marker, content)) = bullet_marker(rest) {
-        if content.trim().is_empty() {
-            return indent;
-        }
-        return format!("{indent}{marker}");
-    }
-
-    if let Some((next_marker, content)) = ordered_list_next_marker(rest) {
-        if content.trim().is_empty() {
-            return indent;
-        }
-        return format!("{indent}{next_marker}");
-    }
-
-    String::new()
-}
-
-fn parse_indent_level(line: &str) -> (usize, &str) {
-    let bytes = line.as_bytes();
-    let mut i = 0;
-    let mut spaces = 0usize;
-    while i < bytes.len() {
-        match bytes[i] {
-            b' ' => {
-                i += 1;
-                spaces += 1;
-            }
-            b'\t' => {
-                i += 1;
-                spaces += 4;
-            }
-            _ => break,
-        }
-    }
-    let rest = &line[i..];
-    (spaces / 2, rest)
-}
-
-fn checkbox_marker(rest: &str) -> Option<(&'static str, &str)> {
-    if let Some(content) = rest.strip_prefix("- [ ] ") {
-        return Some(("- [ ] ", content));
-    }
-    if let Some(content) = rest.strip_prefix("- [x] ") {
-        return Some(("- [x] ", content));
-    }
-    if let Some(content) = rest.strip_prefix("- [X] ") {
-        return Some(("- [X] ", content));
-    }
-    None
-}
-
-fn bullet_marker(rest: &str) -> Option<(&'static str, &str)> {
-    if let Some(content) = rest.strip_prefix("- ") {
-        return Some(("- ", content));
-    }
-    if let Some(content) = rest.strip_prefix("* ") {
-        return Some(("* ", content));
-    }
-    if let Some(content) = rest.strip_prefix("+ ") {
-        return Some(("+ ", content));
-    }
-    None
-}
-
-fn ordered_list_next_marker(rest: &str) -> Option<(String, &str)> {
-    let bytes = rest.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() && bytes[i].is_ascii_digit() {
-        i += 1;
-    }
-    if i == 0 || i + 1 >= bytes.len() {
-        return None;
-    }
-
-    let punct = bytes[i];
-    if (punct != b'.' && punct != b')') || bytes[i + 1] != b' ' {
-        return None;
-    }
-
-    let n: usize = rest[..i].parse().ok()?;
-    let next = n.saturating_add(1);
-    let punct_char = punct as char;
-    let next_marker = format!("{}{punct_char} ", next);
-    let content = &rest[i + 2..];
-    Some((next_marker, content))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1964,7 +1623,7 @@ mod tests {
     }
 
     fn send_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
-        handle_editing_mode(app, KeyEvent::new(code, modifiers));
+        crate::input::editing::handle_editing_mode(app, KeyEvent::new(code, modifiers));
     }
 
     fn send_char(app: &mut App, ch: char) {
