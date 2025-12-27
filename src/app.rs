@@ -678,8 +678,10 @@ impl<'a> App<'a> {
     pub fn restore_editor_snapshot(&mut self, snapshot: EditorSnapshot) {
         self.textarea = TextArea::from(snapshot.lines);
         self.textarea.set_placeholder_text(PLACEHOLDER_COMPOSE);
-        self.textarea
-            .move_cursor(CursorMove::Jump(snapshot.cursor.0 as u16, snapshot.cursor.1 as u16));
+        self.textarea.move_cursor(CursorMove::Jump(
+            snapshot.cursor.0 as u16,
+            snapshot.cursor.1 as u16,
+        ));
     }
 
     pub fn record_undo_snapshot(&mut self) {

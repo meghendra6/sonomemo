@@ -64,11 +64,11 @@ fn is_match(key: &KeyEvent, binding: &str) -> bool {
     // - Alphabetic keys should not match when Shift is held unless explicitly bound (avoid "shift+t" matching "t").
     if let KeyCode::Char(tc) = target_code
         && tc.is_ascii_alphabetic()
-            && !target_modifiers.contains(KeyModifiers::SHIFT)
-            && key.modifiers.contains(KeyModifiers::SHIFT)
-        {
-            return false;
-        }
+        && !target_modifiers.contains(KeyModifiers::SHIFT)
+        && key.modifiers.contains(KeyModifiers::SHIFT)
+    {
+        return false;
+    }
     if target_code == KeyCode::Enter {
         return key.modifiers == target_modifiers;
     }

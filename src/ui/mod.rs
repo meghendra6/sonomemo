@@ -91,13 +91,15 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         };
 
         let mut search_regex: Option<Regex> = None;
-        if app.is_search_result && highlight_ready
-            && let Some(query) = app.search_highlight_query.as_deref() {
-                let query = query.trim();
-                if !query.is_empty() {
-                    search_regex = Regex::new(&format!("(?i){}", regex::escape(query))).ok();
-                }
+        if app.is_search_result
+            && highlight_ready
+            && let Some(query) = app.search_highlight_query.as_deref()
+        {
+            let query = query.trim();
+            if !query.is_empty() {
+                search_regex = Regex::new(&format!("(?i){}", regex::escape(query))).ok();
             }
+        }
 
         let search_style = Style::default()
             .bg(tokens.ui_highlight)
@@ -121,24 +123,25 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             // Insert date separator if date changed (only for non-search view)
             if !app.is_search_result
                 && let Some(ref current_date) = entry_date
-                    && last_date.as_ref() != Some(current_date) {
-                        let separator_line = Line::from(vec![
-                            Span::styled(
-                                "─".repeat(list_area_width.saturating_sub(current_date.len() + 2)),
-                                Style::default().fg(tokens.ui_muted),
-                            ),
-                            Span::styled(
-                                format!(" {} ", current_date),
-                                Style::default()
-                                    .fg(tokens.ui_accent)
-                                    .add_modifier(Modifier::BOLD),
-                            ),
-                        ]);
-                        items_with_separators.push(ListItem::new(separator_line));
-                        ui_to_log_index.push(None); // Separator has no corresponding log entry
-                        last_date = Some(current_date.clone());
-                        ui_index += 1;
-                    }
+                && last_date.as_ref() != Some(current_date)
+            {
+                let separator_line = Line::from(vec![
+                    Span::styled(
+                        "─".repeat(list_area_width.saturating_sub(current_date.len() + 2)),
+                        Style::default().fg(tokens.ui_muted),
+                    ),
+                    Span::styled(
+                        format!(" {} ", current_date),
+                        Style::default()
+                            .fg(tokens.ui_accent)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ]);
+                items_with_separators.push(ListItem::new(separator_line));
+                ui_to_log_index.push(None); // Separator has no corresponding log entry
+                last_date = Some(current_date.clone());
+                ui_index += 1;
+            }
 
             // Render the actual entry
             let mut lines: Vec<Line<'static>> = Vec::new();
@@ -392,13 +395,15 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             let mut parts = Vec::new();
             parts.push(format!("{} results", app.logs.len()));
             if let Some(query) = app.last_search_query.as_deref()
-                && !query.trim().is_empty() {
-                    parts.push(format!("\"{}\"", query.trim()));
-                }
+                && !query.trim().is_empty()
+            {
+                parts.push(format!("\"{}\"", query.trim()));
+            }
             if let Some(selected) = app.logs_state.selected()
-                && !app.logs.is_empty() {
-                    parts.push(format!("Sel {}/{}", selected + 1, app.logs.len()));
-                }
+                && !app.logs.is_empty()
+            {
+                parts.push(format!("Sel {}/{}", selected + 1, app.logs.len()));
+            }
             parts.push(stats_summary.clone());
             parts.join(" · ")
         } else {
@@ -781,42 +786,43 @@ pub fn ui(f: &mut Frame, app: &mut App) {
 
     // Manual cursor position setting (required for Korean/CJK IME support)
     if let Some(inner) = cursor_area
-        && inner.height > 0 && inner.width > 0 {
-            let (cursor_row, cursor_col) = app.textarea.cursor();
-            let prefix_width = compose_prefix_width(app.config.ui.line_numbers);
-            let content_width = (inner.width as usize)
-                .saturating_sub(prefix_width as usize)
-                .max(1);
+        && inner.height > 0
+        && inner.width > 0
+    {
+        let (cursor_row, cursor_col) = app.textarea.cursor();
+        let prefix_width = compose_prefix_width(app.config.ui.line_numbers);
+        let content_width = (inner.width as usize)
+            .saturating_sub(prefix_width as usize)
+            .max(1);
 
-            // Calculate visual row considering line wrapping
-            let lines = app.textarea.lines();
-            let mut visual_row: usize = 0;
-            let mut cursor_visual_col: usize = 0;
+        // Calculate visual row considering line wrapping
+        let lines = app.textarea.lines();
+        let mut visual_row: usize = 0;
+        let mut cursor_visual_col: usize = 0;
 
-            for (idx, line) in lines.iter().enumerate() {
-                let wrapped = wrap_line_for_editor(line, content_width);
+        for (idx, line) in lines.iter().enumerate() {
+            let wrapped = wrap_line_for_editor(line, content_width);
 
-                if idx == cursor_row {
-                    let (wrap_offset, wrap_col) =
-                        find_cursor_in_wrapped_lines(&wrapped, cursor_col);
-                    visual_row += wrap_offset;
-                    cursor_visual_col = wrap_col;
-                    break;
-                }
-
-                visual_row += wrapped.len();
+            if idx == cursor_row {
+                let (wrap_offset, wrap_col) = find_cursor_in_wrapped_lines(&wrapped, cursor_col);
+                visual_row += wrap_offset;
+                cursor_visual_col = wrap_col;
+                break;
             }
 
-            let visual_row_u16 = (visual_row.min(u16::MAX as usize)) as u16;
-            let row_in_view = visual_row_u16.saturating_sub(app.textarea_viewport_row);
-            let row_in_view = row_in_view.min(inner.height.saturating_sub(1));
-
-            let col_in_view = (cursor_visual_col.min(u16::MAX as usize)) as u16;
-            let col_in_view = col_in_view.saturating_add(prefix_width);
-            let col_in_view = col_in_view.min(inner.width.saturating_sub(1));
-
-            f.set_cursor_position((inner.x + col_in_view, inner.y + row_in_view));
+            visual_row += wrapped.len();
         }
+
+        let visual_row_u16 = (visual_row.min(u16::MAX as usize)) as u16;
+        let row_in_view = visual_row_u16.saturating_sub(app.textarea_viewport_row);
+        let row_in_view = row_in_view.min(inner.height.saturating_sub(1));
+
+        let col_in_view = (cursor_visual_col.min(u16::MAX as usize)) as u16;
+        let col_in_view = col_in_view.saturating_add(prefix_width);
+        let col_in_view = col_in_view.min(inner.width.saturating_sub(1));
+
+        f.set_cursor_position((inner.x + col_in_view, inner.y + row_in_view));
+    }
 
     render_status_bar(f, status_area, app, &tokens);
 
@@ -954,6 +960,8 @@ struct StyledSegment {
     style: Style,
 }
 
+// UI render helper keeps explicit parameters.
+#[allow(clippy::too_many_arguments)]
 fn compose_wrapped_line(
     line: &str,
     tokens: &theme::ThemeTokens,
@@ -1051,10 +1059,7 @@ fn apply_selection_to_segments(
 ) -> Vec<Span<'static>> {
     if segments.is_empty() {
         if selection.is_some() {
-            return vec![Span::styled(
-                " ",
-                Style::default().bg(selection_bg),
-            )];
+            return vec![Span::styled(" ", Style::default().bg(selection_bg))];
         }
         return Vec::new();
     }
@@ -1068,10 +1073,7 @@ fn apply_selection_to_segments(
 
     let total_len: usize = segments.iter().map(|seg| seg.text.chars().count()).sum();
     if total_len == 0 {
-        return vec![Span::styled(
-            " ",
-            Style::default().bg(selection_bg),
-        )];
+        return vec![Span::styled(" ", Style::default().bg(selection_bg))];
     }
     let sel_start = selection.start.saturating_sub(wrap_start_col);
     let sel_end = selection.end.saturating_sub(wrap_start_col);
@@ -1177,11 +1179,7 @@ fn compose_prefix_width(show_line_numbers: bool) -> u16 {
     width
 }
 
-fn selection_range_for_line(
-    app: &App,
-    line_idx: usize,
-    line_len: usize,
-) -> Option<SelectionRange> {
+fn selection_range_for_line(app: &App, line_idx: usize, line_len: usize) -> Option<SelectionRange> {
     let EditorMode::Visual(kind) = app.editor_mode else {
         return None;
     };
@@ -1240,15 +1238,8 @@ fn selection_range_for_line(
     }
 }
 
-fn ordered_positions(
-    a: (usize, usize),
-    b: (usize, usize),
-) -> ((usize, usize), (usize, usize)) {
-    if a <= b {
-        (a, b)
-    } else {
-        (b, a)
-    }
+fn ordered_positions(a: (usize, usize), b: (usize, usize)) -> ((usize, usize), (usize, usize)) {
+    if a <= b { (a, b) } else { (b, a) }
 }
 
 fn split_indent(line: &str) -> (usize, &str, &str) {
@@ -1348,24 +1339,23 @@ fn render_status_bar(f: &mut Frame, area: Rect, app: &App, tokens: &theme::Theme
             Some((hint, tokens.ui_muted))
         }
     } else if let Some(toast) = app.toast_message.as_deref()
-        && !toast.is_empty() {
-            Some((toast, tokens.ui_toast_info))
+        && !toast.is_empty()
+    {
+        Some((toast, tokens.ui_toast_info))
     } else {
         None
     };
 
     if let Some((message, color)) = status_message {
-            if !right_plain.is_empty() {
-                right_plain.push_str("  ");
-                right_spans.push(Span::raw("  "));
-            }
-            right_plain.push_str(message);
-            right_spans.push(Span::styled(
-                message,
-                Style::default()
-                    .fg(color)
-                    .add_modifier(Modifier::BOLD),
-            ));
+        if !right_plain.is_empty() {
+            right_plain.push_str("  ");
+            right_spans.push(Span::raw("  "));
+        }
+        right_plain.push_str(message);
+        right_spans.push(Span::styled(
+            message,
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ));
     }
 
     let min_left_width = 10u16;
@@ -1411,18 +1401,19 @@ fn status_file_label(app: &App) -> String {
         };
 
         if let Some(path) = selected_path
-            && let Some(name) = Path::new(path).file_name().and_then(|s| s.to_str()) {
-                return name.to_string();
-            }
+            && let Some(name) = Path::new(path).file_name().and_then(|s| s.to_str())
+        {
+            return name.to_string();
+        }
     }
 
     if let Some(editing) = app.editing_entry.as_ref()
         && let Some(name) = Path::new(&editing.file_path)
             .file_name()
             .and_then(|s| s.to_str())
-        {
-            return name.to_string();
-        }
+    {
+        return name.to_string();
+    }
 
     if app.is_search_result || app.input_mode == InputMode::Search {
         return "Search Results".to_string();

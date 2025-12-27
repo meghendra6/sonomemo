@@ -70,18 +70,19 @@ pub fn render_activity_popup(f: &mut Frame, app: &App) {
     let mut items = Vec::new();
 
     // Header row
-    items.push(ListItem::new(Line::from(vec![
-        Span::styled(
-            "Date        Logs  🍅   Activity                    Pomodoros",
-            Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
-        ),
-    ])));
+    items.push(ListItem::new(Line::from(vec![Span::styled(
+        "Date        Logs  🍅   Activity                    Pomodoros",
+        Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::BOLD),
+    )])));
     items.push(ListItem::new(Line::from("")));
 
     for i in 0..14 {
         let date = today - chrono::Duration::days(i);
         let date_str = date.format("%Y-%m-%d").to_string();
-        let (line_count, tomato_count) = app.activity_data.get(&date_str).cloned().unwrap_or((0, 0));
+        let (line_count, tomato_count) =
+            app.activity_data.get(&date_str).cloned().unwrap_or((0, 0));
 
         // Activity bar (based on log count)
         let bar_len = line_count.min(20);
@@ -108,9 +109,15 @@ pub fn render_activity_popup(f: &mut Frame, app: &App) {
 
         items.push(ListItem::new(Line::from(vec![
             Span::raw(format!("{} ", date_str)),
-            Span::styled(format!("{:3}", line_count), Style::default().fg(Color::Cyan)),
+            Span::styled(
+                format!("{:3}", line_count),
+                Style::default().fg(Color::Cyan),
+            ),
             Span::raw("  "),
-            Span::styled(format!("{:2}", tomato_count), Style::default().fg(Color::Red)),
+            Span::styled(
+                format!("{:2}", tomato_count),
+                Style::default().fg(Color::Red),
+            ),
             Span::raw("   "),
             Span::styled(format!("{:<20}", bar), Style::default().fg(activity_color)),
             Span::raw(" "),
@@ -200,7 +207,10 @@ pub fn render_tag_popup(f: &mut Frame, app: &mut App) {
         .iter()
         .map(|(tag, count)| {
             ListItem::new(Line::from(vec![
-                Span::styled(tag.clone(), Style::default().fg(tag_color).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    tag.clone(),
+                    Style::default().fg(tag_color).add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(format!(" ({})", count)),
             ]))
         })
@@ -388,12 +398,7 @@ pub fn render_help_popup(f: &mut Frame, app: &App) {
     );
 }
 
-fn render_visual_help_popup(
-    f: &mut Frame,
-    _app: &App,
-    kind: VisualKind,
-    tokens: &ThemeTokens,
-) {
+fn render_visual_help_popup(f: &mut Frame, _app: &App, kind: VisualKind, tokens: &ThemeTokens) {
     let block = Block::default()
         .title(" Visual Help ")
         .borders(Borders::ALL)
@@ -465,40 +470,6 @@ fn visual_help_lines(kind: VisualKind, tokens: &ThemeTokens) -> Vec<Line<'static
             Span::styled(" help", label_style),
         ]),
     ]
-}
-
-#[cfg(test)]
-mod tests {
-    use super::visual_help_lines;
-    use crate::config::Theme;
-    use crate::models::VisualKind;
-    use crate::ui::theme::ThemeTokens;
-
-    fn line_to_string(line: &ratatui::text::Line<'_>) -> String {
-        line.spans
-            .iter()
-            .map(|span| span.content.as_ref())
-            .collect::<String>()
-    }
-
-    #[test]
-    fn visual_help_includes_motion_and_actions() {
-        let tokens = ThemeTokens::from_theme(&Theme::default());
-        let lines = visual_help_lines(VisualKind::Block, &tokens);
-        let combined = lines
-            .iter()
-            .map(line_to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        assert!(combined.contains("VISUAL (BLOCK)"));
-        assert!(combined.contains("h j k l"));
-        assert!(combined.contains("w b e"));
-        assert!(combined.contains("W B E"));
-        assert!(combined.contains("y yank"));
-        assert!(combined.contains("d/x delete"));
-        assert!(combined.contains("Esc normal"));
-    }
 }
 
 pub fn render_discard_popup(f: &mut Frame, _app: &App) {
@@ -689,4 +660,38 @@ fn fmt_keys(keys: &[String]) -> String {
         return "-".to_string();
     }
     keys.join(" / ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::visual_help_lines;
+    use crate::config::Theme;
+    use crate::models::VisualKind;
+    use crate::ui::theme::ThemeTokens;
+
+    fn line_to_string(line: &ratatui::text::Line<'_>) -> String {
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>()
+    }
+
+    #[test]
+    fn visual_help_includes_motion_and_actions() {
+        let tokens = ThemeTokens::from_theme(&Theme::default());
+        let lines = visual_help_lines(VisualKind::Block, &tokens);
+        let combined = lines
+            .iter()
+            .map(line_to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(combined.contains("VISUAL (BLOCK)"));
+        assert!(combined.contains("h j k l"));
+        assert!(combined.contains("w b e"));
+        assert!(combined.contains("W B E"));
+        assert!(combined.contains("y yank"));
+        assert!(combined.contains("d/x delete"));
+        assert!(combined.contains("Esc normal"));
+    }
 }

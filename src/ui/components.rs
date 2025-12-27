@@ -317,12 +317,7 @@ fn parse_words(
         };
 
         if let Some(regex) = search_regex {
-            spans.extend(highlight_matches(
-                word,
-                base_style,
-                search_style,
-                regex,
-            ));
+            spans.extend(highlight_matches(word, base_style, search_style, regex));
         } else {
             spans.push(Span::styled(word.to_string(), base_style));
         }
