@@ -168,20 +168,22 @@ mod tests {
 
     #[test]
     fn honors_ui_overrides() {
-        let mut theme = Theme::default();
-        theme.ui = Some(ThemeUiOverrides {
-            fg: Some("White".to_string()),
-            bg: Some("Black".to_string()),
-            muted: Some("DarkGray".to_string()),
-            accent: Some("Cyan".to_string()),
-            selection_bg: Some("10,20,30".to_string()),
-            cursorline_bg: Some("20,30,40".to_string()),
-            toast: Some(ThemeToastOverrides {
-                info: Some("Magenta".to_string()),
-                success: Some("LightGreen".to_string()),
-                error: Some("LightRed".to_string()),
+        let theme = Theme {
+            ui: Some(ThemeUiOverrides {
+                fg: Some("White".to_string()),
+                bg: Some("Black".to_string()),
+                muted: Some("DarkGray".to_string()),
+                accent: Some("Cyan".to_string()),
+                selection_bg: Some("10,20,30".to_string()),
+                cursorline_bg: Some("20,30,40".to_string()),
+                toast: Some(ThemeToastOverrides {
+                    info: Some("Magenta".to_string()),
+                    success: Some("LightGreen".to_string()),
+                    error: Some("LightRed".to_string()),
+                }),
             }),
-        });
+            ..Default::default()
+        };
 
         let tokens = ThemeTokens::from_theme(&theme);
         assert_eq!(tokens.ui_fg, Color::White);

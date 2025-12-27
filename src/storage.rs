@@ -118,9 +118,10 @@ pub fn get_available_log_dates(log_path: &Path) -> io::Result<Vec<NaiveDate>> {
             let path = entry.path();
             if path.extension().and_then(|s| s.to_str()) == Some("md")
                 && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
-                    && let Ok(date) = NaiveDate::parse_from_str(stem, "%Y-%m-%d") {
-                        dates.push(date);
-                    }
+                && let Ok(date) = NaiveDate::parse_from_str(stem, "%Y-%m-%d")
+            {
+                dates.push(date);
+            }
         }
     }
 
@@ -229,10 +230,7 @@ fn next_non_empty_is_timestamp(lines: &[&str], start: usize) -> bool {
 }
 
 fn normalize_task_text(text: &str) -> String {
-    let normalized = text
-        .split_whitespace()
-        .collect::<Vec<&str>>()
-        .join(" ");
+    let normalized = text.split_whitespace().collect::<Vec<&str>>().join(" ");
     normalized.to_lowercase()
 }
 
@@ -479,12 +477,12 @@ pub fn complete_task_chain(log_path: &Path, task: &TaskItem) -> io::Result<usize
                 continue;
             }
 
-            if !parsed.is_done {
-                if let Some(new_line) = mark_task_completed_line(line) {
-                    *line = new_line;
-                    completed_count += 1;
-                    changed = true;
-                }
+            if !parsed.is_done
+                && let Some(new_line) = mark_task_completed_line(line)
+            {
+                *line = new_line;
+                completed_count += 1;
+                changed = true;
             }
 
             if let Some(next_date) = parsed.carryover_from {
@@ -578,8 +576,8 @@ pub fn append_tomato_to_line(file_path: &str, line_number: usize) -> io::Result<
 
 pub fn collect_carryover_tasks(log_path: &Path, today: &str) -> io::Result<Vec<String>> {
     ensure_log_dir(log_path)?;
-    let today_date = NaiveDate::parse_from_str(today, "%Y-%m-%d")
-        .unwrap_or_else(|_| Local::now().date_naive());
+    let today_date =
+        NaiveDate::parse_from_str(today, "%Y-%m-%d").unwrap_or_else(|_| Local::now().date_naive());
     let mut resolved: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut carryover = Vec::new();
 
@@ -642,9 +640,7 @@ pub fn collect_carryover_tasks(log_path: &Path, today: &str) -> io::Result<Vec<S
                 continue;
             }
             let indent = "  ".repeat(parsed.indent_level);
-            carryover.push(format!(
-                "{indent}- [ ] {base_text} ⟦{date_str}⟧"
-            ));
+            carryover.push(format!("{indent}- [ ] {base_text} ⟦{date_str}⟧"));
         }
     }
 
@@ -663,15 +659,16 @@ pub fn get_all_tags(log_path: &Path) -> io::Result<Vec<(String, usize)>> {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.extension().and_then(|s| s.to_str()) == Some("md")
-                && let Ok(content) = fs::read_to_string(&path) {
-                    for line in content.lines() {
-                        for word in line.split_whitespace() {
-                            if word.starts_with('#') && word.len() > 1 {
-                                *tag_counts.entry(word.to_string()).or_insert(0) += 1;
-                            }
+                && let Ok(content) = fs::read_to_string(&path)
+            {
+                for line in content.lines() {
+                    for word in line.split_whitespace() {
+                        if word.starts_with('#') && word.len() > 1 {
+                            *tag_counts.entry(word.to_string()).or_insert(0) += 1;
                         }
                     }
                 }
+            }
         }
     }
 
@@ -710,34 +707,34 @@ pub fn get_activity_stats(
             let path = entry.path();
             if path.extension().and_then(|s| s.to_str()) == Some("md")
                 && let Some(filename) = path.file_stem().and_then(|s| s.to_str())
-                    && let Ok(content) = fs::read_to_string(&path) {
-                        let mut line_count = 0usize;
-                        let mut tomato_count = 0usize;
+                && let Ok(content) = fs::read_to_string(&path)
+            {
+                let mut line_count = 0usize;
+                let mut tomato_count = 0usize;
 
-                        for line in content.lines() {
-                            if line.trim().is_empty() || line.contains("System: Carryover Checked")
-                            {
-                                continue;
-                            }
-                            line_count += 1;
-
-                            // Count tomatoes (only from non-carryover tasks)
-                            let s = strip_timestamp_prefix(line).trim_start();
-
-                            if let Some(text) = s
-                                .strip_prefix("- [ ] ")
-                                .or_else(|| s.strip_prefix("- [x] "))
-                                .or_else(|| s.strip_prefix("- [X] "))
-                            {
-                                // Only count tomatoes if not a carryover task
-                                if !text.contains("⟦") {
-                                    tomato_count += count_trailing_tomatoes(text);
-                                }
-                            }
-                        }
-
-                        stats.insert(filename.to_string(), (line_count, tomato_count));
+                for line in content.lines() {
+                    if line.trim().is_empty() || line.contains("System: Carryover Checked") {
+                        continue;
                     }
+                    line_count += 1;
+
+                    // Count tomatoes (only from non-carryover tasks)
+                    let s = strip_timestamp_prefix(line).trim_start();
+
+                    if let Some(text) = s
+                        .strip_prefix("- [ ] ")
+                        .or_else(|| s.strip_prefix("- [x] "))
+                        .or_else(|| s.strip_prefix("- [X] "))
+                    {
+                        // Only count tomatoes if not a carryover task
+                        if !text.contains("⟦") {
+                            tomato_count += count_trailing_tomatoes(text);
+                        }
+                    }
+                }
+
+                stats.insert(filename.to_string(), (line_count, tomato_count));
+            }
         }
     }
     Ok(stats)
@@ -835,7 +832,10 @@ mod tests {
         }
         assert!(timestamps.len() >= 2);
         let second = timestamps[1];
-        assert_eq!(lines.get(second.saturating_sub(1)).copied().unwrap_or(""), "");
+        assert_eq!(
+            lines.get(second.saturating_sub(1)).copied().unwrap_or(""),
+            ""
+        );
     }
 
     #[test]
@@ -874,11 +874,7 @@ mod tests {
     fn complete_task_chain_marks_previous_carryover() {
         let dir = temp_log_dir();
         write_log(&dir, "2024-01-01", "- [ ] Write  Report\n");
-        write_log(
-            &dir,
-            "2024-01-02",
-            "- [ ] write report ⟦2024-01-01⟧\n",
-        );
+        write_log(&dir, "2024-01-02", "- [ ] write report ⟦2024-01-01⟧\n");
 
         let task = read_tasks_for_date(&dir, "2024-01-02")
             .into_iter()
@@ -901,11 +897,7 @@ mod tests {
         let dir = temp_log_dir();
         write_log(&dir, "2024-02-01", "- [ ] Same Task\n");
         write_log(&dir, "2024-02-02", "- [ ] Same Task\n");
-        write_log(
-            &dir,
-            "2024-02-03",
-            "- [ ] Same Task ⟦2024-02-02⟧\n",
-        );
+        write_log(&dir, "2024-02-03", "- [ ] Same Task ⟦2024-02-02⟧\n");
 
         let task = read_tasks_for_date(&dir, "2024-02-03")
             .into_iter()
@@ -924,11 +916,7 @@ mod tests {
     fn complete_task_chain_does_not_touch_future_tasks() {
         let dir = temp_log_dir();
         write_log(&dir, "2024-03-01", "- [ ] Future Task\n");
-        write_log(
-            &dir,
-            "2024-03-02",
-            "- [ ] Future Task ⟦2024-03-01⟧\n",
-        );
+        write_log(&dir, "2024-03-02", "- [ ] Future Task ⟦2024-03-01⟧\n");
         write_log(&dir, "2024-03-03", "- [ ] Future Task\n");
 
         let task = read_tasks_for_date(&dir, "2024-03-02")

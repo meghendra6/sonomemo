@@ -135,7 +135,9 @@ pub fn is_timestamped_line(line: &str) -> bool {
 
 /// Strips the timestamp prefix (and optional heading markers) when present.
 pub fn strip_timestamp_prefix(line: &str) -> &str {
-    split_timestamp_line(line).map(|(_, rest)| rest).unwrap_or(line)
+    split_timestamp_line(line)
+        .map(|(_, rest)| rest)
+        .unwrap_or(line)
 }
 
 /// Returns true if the line starts with a heading timestamp like "## [HH:MM:SS]".
