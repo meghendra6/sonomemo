@@ -555,12 +555,9 @@ fn handle_normal_mode(app: &mut App, key: event::KeyEvent) {
         app.navigate_focus = models::NavigateFocus::Tasks;
     } else if key_match(&key, &app.config.keybindings.global.focus_timeline) {
         app.navigate_focus = models::NavigateFocus::Timeline;
-    } else if key_match(&key, &app.config.keybindings.global.focus_next) {
-        app.navigate_focus = match app.navigate_focus {
-            models::NavigateFocus::Timeline => models::NavigateFocus::Tasks,
-            models::NavigateFocus::Tasks => models::NavigateFocus::Timeline,
-        };
-    } else if key_match(&key, &app.config.keybindings.global.focus_prev) {
+    } else if key_match(&key, &app.config.keybindings.global.focus_next)
+        || key_match(&key, &app.config.keybindings.global.focus_prev)
+    {
         app.navigate_focus = match app.navigate_focus {
             models::NavigateFocus::Timeline => models::NavigateFocus::Tasks,
             models::NavigateFocus::Tasks => models::NavigateFocus::Timeline,
@@ -685,11 +682,10 @@ fn handle_normal_mode(app: &mut App, key: event::KeyEvent) {
             }
             app.update_logs();
         }
-    } else if app.navigate_focus == models::NavigateFocus::Tasks
-        && key_match(&key, &app.config.keybindings.tasks.start_pomodoro)
+    } else if (app.navigate_focus == models::NavigateFocus::Tasks
+        && key_match(&key, &app.config.keybindings.tasks.start_pomodoro))
+        || key_match(&key, &app.config.keybindings.global.pomodoro)
     {
-        open_or_toggle_pomodoro_for_selected_task(app);
-    } else if key_match(&key, &app.config.keybindings.global.pomodoro) {
         open_or_toggle_pomodoro_for_selected_task(app);
     } else if key_match(&key, &app.config.keybindings.global.activity) {
         if let Ok(data) = storage::get_activity_stats(&app.config.data.log_path) {

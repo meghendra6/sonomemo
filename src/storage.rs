@@ -477,12 +477,12 @@ pub fn complete_task_chain(log_path: &Path, task: &TaskItem) -> io::Result<usize
                 continue;
             }
 
-            if !parsed.is_done {
-                if let Some(new_line) = mark_task_completed_line(line) {
-                    *line = new_line;
-                    completed_count += 1;
-                    changed = true;
-                }
+            if !parsed.is_done
+                && let Some(new_line) = mark_task_completed_line(line)
+            {
+                *line = new_line;
+                completed_count += 1;
+                changed = true;
             }
 
             if let Some(next_date) = parsed.carryover_from {

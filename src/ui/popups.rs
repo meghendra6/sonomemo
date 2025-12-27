@@ -472,40 +472,6 @@ fn visual_help_lines(kind: VisualKind, tokens: &ThemeTokens) -> Vec<Line<'static
     ]
 }
 
-#[cfg(test)]
-mod tests {
-    use super::visual_help_lines;
-    use crate::config::Theme;
-    use crate::models::VisualKind;
-    use crate::ui::theme::ThemeTokens;
-
-    fn line_to_string(line: &ratatui::text::Line<'_>) -> String {
-        line.spans
-            .iter()
-            .map(|span| span.content.as_ref())
-            .collect::<String>()
-    }
-
-    #[test]
-    fn visual_help_includes_motion_and_actions() {
-        let tokens = ThemeTokens::from_theme(&Theme::default());
-        let lines = visual_help_lines(VisualKind::Block, &tokens);
-        let combined = lines
-            .iter()
-            .map(line_to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        assert!(combined.contains("VISUAL (BLOCK)"));
-        assert!(combined.contains("h j k l"));
-        assert!(combined.contains("w b e"));
-        assert!(combined.contains("W B E"));
-        assert!(combined.contains("y yank"));
-        assert!(combined.contains("d/x delete"));
-        assert!(combined.contains("Esc normal"));
-    }
-}
-
 pub fn render_discard_popup(f: &mut Frame, _app: &App) {
     let block = Block::default()
         .title(" Discard changes? ")
@@ -694,4 +660,38 @@ fn fmt_keys(keys: &[String]) -> String {
         return "-".to_string();
     }
     keys.join(" / ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::visual_help_lines;
+    use crate::config::Theme;
+    use crate::models::VisualKind;
+    use crate::ui::theme::ThemeTokens;
+
+    fn line_to_string(line: &ratatui::text::Line<'_>) -> String {
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>()
+    }
+
+    #[test]
+    fn visual_help_includes_motion_and_actions() {
+        let tokens = ThemeTokens::from_theme(&Theme::default());
+        let lines = visual_help_lines(VisualKind::Block, &tokens);
+        let combined = lines
+            .iter()
+            .map(line_to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(combined.contains("VISUAL (BLOCK)"));
+        assert!(combined.contains("h j k l"));
+        assert!(combined.contains("w b e"));
+        assert!(combined.contains("W B E"));
+        assert!(combined.contains("y yank"));
+        assert!(combined.contains("d/x delete"));
+        assert!(combined.contains("Esc normal"));
+    }
 }

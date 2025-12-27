@@ -960,6 +960,8 @@ struct StyledSegment {
     style: Style,
 }
 
+// UI render helper keeps explicit parameters.
+#[allow(clippy::too_many_arguments)]
 fn compose_wrapped_line(
     line: &str,
     tokens: &theme::ThemeTokens,
