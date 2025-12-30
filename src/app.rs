@@ -1,8 +1,8 @@
 use crate::config::{Config, Theme};
 use crate::models::{
     EditorMode, EntryIdentity, FoldOverride, FoldState, InputMode, LogEntry, NavigateFocus,
-    PomodoroTarget, TaskFilter, TaskItem, count_trailing_tomatoes, is_heading_timestamp_line,
-    split_timestamp_line, strip_timestamp_prefix,
+    PomodoroTarget, Priority, TaskFilter, TaskItem, count_trailing_tomatoes,
+    is_heading_timestamp_line, split_timestamp_line, strip_timestamp_prefix,
 };
 use crate::storage;
 use chrono::{DateTime, Duration, Local, NaiveDate};
@@ -708,6 +708,8 @@ impl<'a> App<'a> {
             TaskFilter::All => self.all_tasks.clone(),
         };
 
+        self.tasks.sort_by_key(|task| (task_priority_rank(task.priority), task.line_number));
+
         if self.tasks.is_empty() {
             self.tasks_state.select(None);
             return;
@@ -993,6 +995,15 @@ fn file_date(file_path: &str) -> Option<String> {
         .file_stem()
         .and_then(|s| s.to_str())
         .map(|s| s.to_string())
+}
+
+fn task_priority_rank(priority: Option<Priority>) -> u8 {
+    match priority {
+        Some(Priority::High) => 0,
+        Some(Priority::Medium) => 1,
+        Some(Priority::Low) => 2,
+        None => 3,
+    }
 }
 
 #[cfg(test)]
