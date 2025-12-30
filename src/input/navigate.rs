@@ -7,7 +7,15 @@ use crate::{
 use crossterm::event::{KeyCode, KeyEvent};
 
 pub fn handle_normal_mode(app: &mut App, key: KeyEvent) {
-    if key_match(&key, &app.config.keybindings.global.help) {
+    if app.navigate_focus == models::NavigateFocus::Timeline
+        && key_match(&key, &app.config.keybindings.timeline.fold_toggle)
+    {
+        app.toggle_entry_fold();
+    } else if app.navigate_focus == models::NavigateFocus::Timeline
+        && key_match(&key, &app.config.keybindings.timeline.fold_cycle)
+    {
+        app.cycle_fold_state();
+    } else if key_match(&key, &app.config.keybindings.global.help) {
         app.show_help_popup = true;
     } else if key_match(&key, &app.config.keybindings.global.tags) {
         actions::open_tag_popup(app);

@@ -74,6 +74,40 @@ pub struct LogEntry {
     pub end_line: usize,
 }
 
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct EntryIdentity {
+    pub file_path: String,
+    pub line_number: usize,
+}
+
+impl From<&LogEntry> for EntryIdentity {
+    fn from(entry: &LogEntry) -> Self {
+        Self {
+            file_path: entry.file_path.clone(),
+            line_number: entry.line_number,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum FoldState {
+    Overview,
+    Contents,
+    ShowAll,
+}
+
+impl Default for FoldState {
+    fn default() -> Self {
+        FoldState::ShowAll
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum FoldOverride {
+    Folded,
+    Expanded,
+}
+
 #[derive(Clone)]
 pub struct AgendaItem {
     pub date: NaiveDate,
@@ -92,8 +126,35 @@ pub struct TaskItem {
     pub file_path: String,
     pub line_number: usize,
     pub is_done: bool,
+    pub priority: Option<Priority>,
     pub task_identity: String,
     pub carryover_from: Option<String>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Priority {
+    High,
+    Medium,
+    Low,
+}
+
+impl Priority {
+    pub fn from_char(c: char) -> Option<Self> {
+        match c.to_ascii_uppercase() {
+            'A' => Some(Priority::High),
+            'B' => Some(Priority::Medium),
+            'C' => Some(Priority::Low),
+            _ => None,
+        }
+    }
+
+    pub fn as_char(self) -> char {
+        match self {
+            Priority::High => 'A',
+            Priority::Medium => 'B',
+            Priority::Low => 'C',
+        }
+    }
 }
 
 #[derive(Clone)]

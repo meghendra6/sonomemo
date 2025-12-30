@@ -1,4 +1,5 @@
 use crate::config::Theme;
+use crate::models::Priority;
 use crate::ui::color_parser::parse_color;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -156,6 +157,19 @@ pub fn parse_markdown_spans(
         (content, false)
     };
 
+    let (content, priority_marker) = if let Some((priority, rest)) = split_priority_marker(content) {
+        (rest, Some(priority))
+    } else {
+        (content, None)
+    };
+
+    if let Some(priority) = priority_marker {
+        spans.push(Span::styled(
+            format!("[#{}] ", priority.as_char()),
+            priority_style(priority),
+        ));
+    }
+
     // Inline code: split on backticks and style code segments.
     let mut is_code = false;
     for segment in content.split('`') {
@@ -189,6 +203,36 @@ fn bullet_for_level(leading_spaces: usize) -> char {
         1 => '◦',
         2 => '▪',
         _ => '▫',
+    }
+}
+
+fn split_priority_marker(text: &str) -> Option<(Priority, &str)> {
+    let trimmed = text.trim_start();
+    let Some(rest) = trimmed.strip_prefix("[#") else {
+        return None;
+    };
+    let mut chars = rest.chars();
+    let Some(letter) = chars.next() else {
+        return None;
+    };
+    if !matches!(chars.next(), Some(']')) {
+        return None;
+    }
+    let priority = Priority::from_char(letter)?;
+    Some((priority, chars.as_str().trim_start()))
+}
+
+fn priority_style(priority: Priority) -> Style {
+    match priority {
+        Priority::High => Style::default()
+            .fg(Color::LightRed)
+            .add_modifier(Modifier::BOLD),
+        Priority::Medium => Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+        Priority::Low => Style::default()
+            .fg(Color::LightBlue)
+            .add_modifier(Modifier::BOLD),
     }
 }
 

@@ -389,6 +389,8 @@ pub fn render_help_popup(f: &mut Frame, app: &App) {
                 ("Page down", fmt_keys(&kb.timeline.page_down)),
                 ("Top", fmt_keys(&kb.timeline.top)),
                 ("Bottom", fmt_keys(&kb.timeline.bottom)),
+                ("Fold toggle", fmt_keys(&kb.timeline.fold_toggle)),
+                ("Fold cycle", fmt_keys(&kb.timeline.fold_cycle)),
                 ("Edit", fmt_keys(&kb.timeline.edit)),
                 ("Toggle checkbox", fmt_keys(&kb.timeline.toggle_todo)),
             ],

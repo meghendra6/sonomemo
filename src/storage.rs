@@ -1,5 +1,5 @@
 use crate::models::{
-    AgendaItem, LogEntry, TaskItem, count_trailing_tomatoes, is_timestamped_line,
+    AgendaItem, Priority, LogEntry, TaskItem, count_trailing_tomatoes, is_timestamped_line,
     strip_timestamp_prefix, strip_trailing_tomatoes,
 };
 use chrono::{Duration, Local, NaiveDate};
@@ -294,8 +294,42 @@ fn strip_carryover_marker(text: &str) -> (String, Option<String>) {
     (base, Some(date.to_string()))
 }
 
+fn parse_priority_marker(text: &str) -> Option<Priority> {
+    let trimmed = text.trim_start();
+    let Some(rest) = trimmed.strip_prefix("[#") else {
+        return None;
+    };
+    let mut chars = rest.chars();
+    let Some(letter) = chars.next() else {
+        return None;
+    };
+    if !matches!(chars.next(), Some(']')) {
+        return None;
+    }
+    Priority::from_char(letter)
+}
+
+fn strip_priority_marker(text: &str) -> String {
+    let trimmed = text.trim_start();
+    let Some(rest) = trimmed.strip_prefix("[#") else {
+        return text.to_string();
+    };
+    let mut chars = rest.chars();
+    let Some(letter) = chars.next() else {
+        return text.to_string();
+    };
+    if !matches!(chars.next(), Some(']')) {
+        return text.to_string();
+    }
+    if Priority::from_char(letter).is_none() {
+        return text.to_string();
+    }
+    chars.as_str().trim_start().to_string()
+}
+
 fn task_identity_from_text(text: &str) -> (String, Option<String>) {
-    let (base, carryover_from) = strip_carryover_marker(text);
+    let without_priority = strip_priority_marker(text);
+    let (base, carryover_from) = strip_carryover_marker(&without_priority);
     (normalize_task_text(&base), carryover_from)
 }
 
@@ -324,6 +358,7 @@ fn parse_task_content(content: &str, path_str: &str) -> Vec<TaskItem> {
 
         let (text, tomato_count) = strip_trailing_tomatoes(text);
         let text = text.trim();
+        let priority = parse_priority_marker(text);
         let (task_identity, carryover_from) = task_identity_from_text(text);
         tasks.push(TaskItem {
             text: text.to_string(),
@@ -332,6 +367,7 @@ fn parse_task_content(content: &str, path_str: &str) -> Vec<TaskItem> {
             file_path: path_str.to_string(),
             line_number: i,
             is_done,
+            priority,
             task_identity,
             carryover_from,
         });
@@ -389,7 +425,8 @@ fn parse_task_line(line: &str) -> Option<ParsedTaskLine> {
 
     let (text, _) = strip_trailing_tomatoes(text);
     let text = text.trim();
-    let (base_text, carryover_from) = strip_carryover_marker(text);
+    let base_text = strip_priority_marker(text);
+    let (base_text, carryover_from) = strip_carryover_marker(&base_text);
     let identity = normalize_task_text(&base_text);
 
     Some(ParsedTaskLine {
@@ -901,6 +938,22 @@ mod tests {
         assert_eq!(entries[0].content, "## [09:00:00]\nFirst\n\n- item");
         assert_eq!(entries[0].end_line, 3);
         assert_eq!(entries[1].line_number, 5);
+    }
+
+    #[test]
+    fn parse_task_content_reads_priority_marker() {
+        let content = "- [ ] [#A] Important\n- [x] [#c] Later\n";
+        let tasks = parse_task_content(content, "test.md");
+        assert_eq!(tasks.len(), 2);
+        assert_eq!(tasks[0].priority, Some(Priority::High));
+        assert_eq!(tasks[1].priority, Some(Priority::Low));
+    }
+
+    #[test]
+    fn parse_task_line_ignores_priority_in_identity() {
+        let line = "- [ ] [#B] Task Name";
+        let parsed = parse_task_line(line).expect("parsed");
+        assert_eq!(parsed.identity, normalize_task_text("Task Name"));
     }
 
     fn write_log(dir: &Path, date: &str, content: &str) {
