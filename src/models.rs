@@ -72,6 +72,40 @@ pub struct LogEntry {
     pub end_line: usize,
 }
 
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct EntryIdentity {
+    pub file_path: String,
+    pub line_number: usize,
+}
+
+impl From<&LogEntry> for EntryIdentity {
+    fn from(entry: &LogEntry) -> Self {
+        Self {
+            file_path: entry.file_path.clone(),
+            line_number: entry.line_number,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum FoldState {
+    Overview,
+    Contents,
+    ShowAll,
+}
+
+impl Default for FoldState {
+    fn default() -> Self {
+        FoldState::ShowAll
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum FoldOverride {
+    Folded,
+    Expanded,
+}
+
 #[derive(Clone)]
 pub struct TaskItem {
     pub text: String,
