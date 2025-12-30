@@ -114,8 +114,35 @@ pub struct TaskItem {
     pub file_path: String,
     pub line_number: usize,
     pub is_done: bool,
+    pub priority: Option<Priority>,
     pub task_identity: String,
     pub carryover_from: Option<String>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Priority {
+    High,
+    Medium,
+    Low,
+}
+
+impl Priority {
+    pub fn from_char(c: char) -> Option<Self> {
+        match c.to_ascii_uppercase() {
+            'A' => Some(Priority::High),
+            'B' => Some(Priority::Medium),
+            'C' => Some(Priority::Low),
+            _ => None,
+        }
+    }
+
+    pub fn as_char(self) -> char {
+        match self {
+            Priority::High => 'A',
+            Priority::Medium => 'B',
+            Priority::Low => 'C',
+        }
+    }
 }
 
 #[derive(Clone)]
