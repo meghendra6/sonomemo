@@ -8,6 +8,7 @@ This project was forked from https://github.com/sonohoshi/sonomemo.
 
 - **Timeline**: browse and edit timestamped log entries (multi-line supported)
 - **Tasks**: detect Markdown checkboxes (`- [ ]`, `- [x]`) and toggle them
+- **Task priorities**: add `[#A]`, `[#B]`, `[#C]` after the checkbox to mark priority
 - **Pomodoro per task**: start a timer for a selected task; when it completes, MemoLog appends `🍅` to that task line
 - **Search / Tags**: find entries across days
 - **Markdown rendering**: lists (multi-level), checkboxes, headings, inline code, code fences, links, tags
