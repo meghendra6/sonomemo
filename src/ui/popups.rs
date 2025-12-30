@@ -1,4 +1,4 @@
-use super::components::centered_rect;
+use super::components::{centered_rect, parse_markdown_spans, wrap_markdown_line};
 use crate::app::App;
 use crate::config::{EditorStyle, ThemePreset};
 use crate::models::{EditorMode, InputMode, Mood, VisualKind};
@@ -9,7 +9,7 @@ use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
-    text::{Line, Span},
+    text::{Line, Span, Text},
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
 };
 
@@ -133,6 +133,80 @@ pub fn render_activity_popup(f: &mut Frame, app: &App) {
         .split(area)[0];
 
     f.render_widget(List::new(items), inner_area);
+}
+
+pub fn render_agenda_popup(f: &mut Frame, app: &App) {
+    let tokens = ThemeTokens::from_theme(&app.config.theme);
+    let block = Block::default()
+        .title(" 📅 Agenda (Last 7 Days) ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(tokens.ui_border_default));
+    let area = centered_rect(80, 70, f.area());
+    let inner = block.inner(area);
+    f.render_widget(Clear, area);
+    f.render_widget(block, area);
+
+    let list_width = inner.width.saturating_sub(2).max(1) as usize;
+
+    let mut items: Vec<ListItem> = Vec::new();
+    let mut last_date: Option<chrono::NaiveDate> = None;
+    let mut ui_selected_index: Option<usize> = None;
+    let mut ui_index = 0usize;
+    let selected = app.agenda_state.selected();
+
+    for (idx, item) in app.agenda_items.iter().enumerate() {
+        if last_date != Some(item.date) {
+            items.push(ListItem::new(Line::from(Span::styled(
+                item.date.format("%Y-%m-%d").to_string(),
+                Style::default()
+                    .fg(tokens.ui_accent)
+                    .add_modifier(Modifier::BOLD),
+            ))));
+            last_date = Some(item.date);
+            ui_index += 1;
+        }
+
+        if selected == Some(idx) {
+            ui_selected_index = Some(ui_index);
+        }
+
+        let mut line = String::new();
+        line.push_str("  ");
+        line.push_str(&"  ".repeat(item.indent));
+        if item.is_done {
+            line.push_str("[x] ");
+        } else {
+            line.push_str("[ ] ");
+        }
+        line.push_str(&item.text);
+
+        let wrapped = wrap_markdown_line(&line, list_width);
+        let lines: Vec<Line<'static>> = wrapped
+            .iter()
+            .map(|l| {
+                Line::from(parse_markdown_spans(
+                    l,
+                    &app.config.theme,
+                    false,
+                    None,
+                    Style::default(),
+                ))
+            })
+            .collect();
+        items.push(ListItem::new(Text::from(lines)));
+        ui_index += 1;
+    }
+
+    let highlight_style = Style::default()
+        .bg(tokens.ui_selection_bg)
+        .add_modifier(Modifier::BOLD);
+    let list = List::new(items)
+        .highlight_symbol("")
+        .highlight_style(highlight_style);
+
+    let mut list_state = ratatui::widgets::ListState::default();
+    list_state.select(ui_selected_index);
+    f.render_stateful_widget(list, inner, &mut list_state);
 }
 
 pub fn render_mood_popup(f: &mut Frame, app: &mut App) {
@@ -299,6 +373,7 @@ pub fn render_help_popup(f: &mut Frame, app: &App) {
                 ("Tags", fmt_keys(&kb.global.tags)),
                 ("Pomodoro", fmt_keys(&kb.global.pomodoro)),
                 ("Activity", fmt_keys(&kb.global.activity)),
+                ("Agenda", fmt_keys(&kb.global.agenda)),
                 ("Log dir", fmt_keys(&kb.global.log_dir)),
                 ("Theme presets", fmt_keys(&kb.global.theme_switcher)),
                 ("Editor style", fmt_keys(&kb.global.editor_style_switcher)),

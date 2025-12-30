@@ -1,5 +1,5 @@
 use crate::models::{
-    LogEntry, Priority, TaskItem, count_trailing_tomatoes, is_timestamped_line,
+    AgendaItem, Priority, LogEntry, TaskItem, count_trailing_tomatoes, is_timestamped_line,
     strip_timestamp_prefix, strip_trailing_tomatoes,
 };
 use chrono::{Duration, Local, NaiveDate};
@@ -146,6 +146,41 @@ pub fn read_today_tasks(log_path: &Path) -> io::Result<Vec<TaskItem>> {
     let path_str = path.to_string_lossy().to_string();
     let content = fs::read_to_string(&path)?;
     Ok(parse_task_content(&content, &path_str))
+}
+
+/// Reads task items for a date range (inclusive), returning agenda items.
+pub fn read_tasks_for_date_range(
+    log_path: &Path,
+    start_date: NaiveDate,
+    end_date: NaiveDate,
+) -> io::Result<Vec<AgendaItem>> {
+    ensure_log_dir(log_path)?;
+    let mut items = Vec::new();
+
+    let mut current = start_date;
+    while current <= end_date {
+        let date_str = current.format("%Y-%m-%d").to_string();
+        let path = get_file_path_for_date(log_path, &date_str);
+        if path.exists() {
+            let path_str = path.to_string_lossy().to_string();
+            if let Ok(content) = fs::read_to_string(&path) {
+                let tasks = parse_task_content(&content, &path_str);
+                for task in tasks {
+                    items.push(AgendaItem {
+                        date: current,
+                        text: task.text,
+                        indent: task.indent,
+                        is_done: task.is_done,
+                        file_path: task.file_path,
+                        line_number: task.line_number,
+                    });
+                }
+            }
+        }
+        current += Duration::days(1);
+    }
+
+    Ok(items)
 }
 
 pub fn search_entries(log_path: &Path, query: &str) -> io::Result<Vec<LogEntry>> {
