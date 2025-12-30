@@ -8,6 +8,7 @@ This project was forked from https://github.com/sonohoshi/sonomemo.
 
 - **Timeline**: browse and edit timestamped log entries (multi-line supported)
 - **Tasks**: detect Markdown checkboxes (`- [ ]`, `- [x]`) and toggle them
+- **Agenda view**: see open tasks from recent days in one list
 - **Pomodoro per task**: start a timer for a selected task; when it completes, MemoLog appends `🍅` to that task line
 - **Search / Tags**: find entries across days
 - **Markdown rendering**: lists (multi-level), checkboxes, headings, inline code, code fences, links, tags
@@ -91,7 +92,7 @@ Available presets:
 
 All keybindings are configurable in `config.toml`.
 
-- Global: `?` help, `h/l` focus, `i` compose, `/` search, `t` tags, `T` theme presets, `p` pomodoro, `g` activity, `o` log dir, `Ctrl+Q` quit
+- Global: `?` help, `h/l` focus, `i` compose, `/` search, `t` tags, `g` activity, `A` agenda, `T` theme presets, `p` pomodoro, `o` log dir, `Ctrl+Q` quit
 - Timeline: `j/k` move, `e` edit entry, `Enter/Space` toggle checkbox
 - Tasks: `j/k` move, `Enter/Space` toggle checkbox, `p` start/stop pomodoro, `e` edit source entry
 - Composer: `Enter` newline, `Shift+Enter` save, `Tab/Shift+Tab` indent/outdent, `Esc` back

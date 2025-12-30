@@ -1,3 +1,5 @@
+use chrono::NaiveDate;
+
 #[derive(PartialEq)]
 pub enum InputMode {
     Navigate,
@@ -70,6 +72,16 @@ pub struct LogEntry {
     pub file_path: String,
     pub line_number: usize,
     pub end_line: usize,
+}
+
+#[derive(Clone)]
+pub struct AgendaItem {
+    pub date: NaiveDate,
+    pub text: String,
+    pub indent: usize,
+    pub is_done: bool,
+    pub file_path: String,
+    pub line_number: usize,
 }
 
 #[derive(Clone)]

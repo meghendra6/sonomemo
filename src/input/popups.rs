@@ -1,4 +1,5 @@
 use crate::{
+    actions,
     app::App,
     config::{self, EditorStyle, ThemePreset, config_path, key_match},
     models::{self, InputMode, Mood},
@@ -49,6 +50,10 @@ pub fn handle_popup_events(app: &mut App, key: KeyEvent) -> bool {
         handle_tag_popup(app, key);
         return true;
     }
+    if app.show_agenda_popup {
+        handle_agenda_popup(app, key);
+        return true;
+    }
     if app.show_activity_popup {
         // Close on any key press
         app.show_activity_popup = false;
@@ -59,6 +64,38 @@ pub fn handle_popup_events(app: &mut App, key: KeyEvent) -> bool {
         return true;
     }
     false
+}
+
+fn handle_agenda_popup(app: &mut App, key: KeyEvent) {
+    if key_match(&key, &app.config.keybindings.popup.up) {
+        let i = match app.agenda_state.selected() {
+            Some(i) => {
+                if i == 0 {
+                    app.agenda_items.len().saturating_sub(1)
+                } else {
+                    i - 1
+                }
+            }
+            None => 0,
+        };
+        app.agenda_state.select(Some(i));
+    } else if key_match(&key, &app.config.keybindings.popup.down) {
+        let i = match app.agenda_state.selected() {
+            Some(i) => {
+                if i + 1 >= app.agenda_items.len() {
+                    0
+                } else {
+                    i + 1
+                }
+            }
+            None => 0,
+        };
+        app.agenda_state.select(Some(i));
+    } else if key_match(&key, &app.config.keybindings.popup.confirm) {
+        actions::jump_to_agenda_item(app);
+    } else if key_match(&key, &app.config.keybindings.popup.cancel) || key.code == KeyCode::Esc {
+        app.show_agenda_popup = false;
+    }
 }
 
 fn handle_discard_popup(app: &mut App, key: KeyEvent) {

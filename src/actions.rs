@@ -5,6 +5,8 @@ use crate::{
 };
 use chrono::{Duration, Local};
 
+const AGENDA_DAYS_BACK: i64 = 7;
+
 pub fn open_tag_popup(app: &mut App) {
     if let Ok(tags) = storage::get_all_tags(&app.config.data.log_path) {
         app.tags = tags;
@@ -60,6 +62,62 @@ pub fn open_activity_popup(app: &mut App) {
     if let Ok(data) = storage::get_activity_stats(&app.config.data.log_path) {
         app.activity_data = data;
         app.show_activity_popup = true;
+    }
+}
+
+pub fn open_agenda_popup(app: &mut App) {
+    let today = Local::now().date_naive();
+    let start = today - Duration::days(AGENDA_DAYS_BACK);
+    let end = today;
+    let items = storage::read_tasks_for_date_range(&app.config.data.log_path, start, end)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|item| !item.is_done)
+        .collect::<Vec<_>>();
+
+    if items.is_empty() {
+        app.toast("No agenda items.");
+        return;
+    }
+
+    app.agenda_items = items;
+    app.agenda_state.select(Some(0));
+    app.show_agenda_popup = true;
+}
+
+pub fn jump_to_agenda_item(app: &mut App) {
+    let Some(selected) = app.agenda_state.selected() else {
+        app.toast("No agenda item selected.");
+        return;
+    };
+    let Some(item) = app.agenda_items.get(selected).cloned() else {
+        app.toast("No agenda item selected.");
+        return;
+    };
+
+    let target_date = item.date;
+    if let Some(start) = app.loaded_start_date {
+        if target_date < start {
+            app.loaded_start_date = Some(target_date);
+            app.update_logs();
+        }
+    } else {
+        app.loaded_start_date = Some(target_date);
+        app.update_logs();
+    }
+
+    let target_path = &item.file_path;
+    let target_line = item.line_number;
+    if let Some(index) = app.logs.iter().position(|entry| {
+        entry.file_path == *target_path
+            && entry.line_number <= target_line
+            && target_line <= entry.end_line
+    }) {
+        app.logs_state.select(Some(index));
+        app.navigate_focus = models::NavigateFocus::Timeline;
+        app.show_agenda_popup = false;
+    } else {
+        app.toast("Agenda item not found.");
     }
 }
 
