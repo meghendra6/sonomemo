@@ -137,6 +137,7 @@ pub struct Config {
     pub ui: UiConfig,
     pub editor: EditorConfig,
     pub data: DataConfig,
+    pub capture: CaptureConfig,
     pub pomodoro: PomodoroConfig,
 }
 
@@ -163,6 +164,21 @@ pub struct EditorConfig {
 impl Default for EditorConfig {
     fn default() -> Self {
         Self { column_width: 88 }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(default)]
+pub struct CaptureConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quick_capture_default_tag: Option<String>,
+}
+
+impl Default for CaptureConfig {
+    fn default() -> Self {
+        Self {
+            quick_capture_default_tag: Some("quick".to_string()),
+        }
     }
 }
 
@@ -207,6 +223,7 @@ pub struct GlobalBindings {
     pub focus_composer: Vec<String>,
     pub focus_next: Vec<String>,
     pub focus_prev: Vec<String>,
+    pub quick_capture: Vec<String>,
     pub search: Vec<String>,
     pub tags: Vec<String>,
     pub activity: Vec<String>,
@@ -227,6 +244,7 @@ impl Default for GlobalBindings {
             focus_composer: vec!["i".to_string()],
             focus_next: vec!["tab".to_string()],
             focus_prev: vec!["backtab".to_string()],
+            quick_capture: vec!["ctrl+enter".to_string()],
             search: vec!["/".to_string()],
             tags: vec!["t".to_string()],
             activity: vec!["g".to_string()],

@@ -5,7 +5,7 @@ use crate::{
     storage,
 };
 use chrono::{Duration, Local};
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 pub fn handle_popup_events(app: &mut App, key: KeyEvent) -> bool {
     if app.show_theme_popup {
@@ -20,6 +20,10 @@ pub fn handle_popup_events(app: &mut App, key: KeyEvent) -> bool {
         if key.code == KeyCode::Esc || key_match(&key, &app.config.keybindings.global.help) {
             app.show_help_popup = false;
         }
+        return true;
+    }
+    if app.show_quick_capture {
+        handle_quick_capture_popup(app, key);
         return true;
     }
 
@@ -59,6 +63,76 @@ pub fn handle_popup_events(app: &mut App, key: KeyEvent) -> bool {
         return true;
     }
     false
+}
+
+fn handle_quick_capture_popup(app: &mut App, key: KeyEvent) {
+    if key.code == KeyCode::Esc {
+        app.reset_quick_capture();
+        app.show_quick_capture = false;
+        return;
+    }
+
+    if key.code == KeyCode::Enter && key.modifiers.contains(KeyModifiers::CONTROL) {
+        submit_quick_capture(app, true);
+        return;
+    }
+
+    if key.code == KeyCode::Enter {
+        submit_quick_capture(app, false);
+        return;
+    }
+
+    app.quick_capture_textarea.input(key);
+}
+
+fn submit_quick_capture(app: &mut App, keep_open: bool) {
+    let text = app
+        .quick_capture_textarea
+        .lines()
+        .join(" ")
+        .trim()
+        .to_string();
+
+    if text.is_empty() {
+        app.toast("Quick capture is empty.");
+        if !keep_open {
+            app.reset_quick_capture();
+            app.show_quick_capture = false;
+        }
+        return;
+    }
+
+    let mut content = text;
+    if let Some(tag) = app
+        .config
+        .capture
+        .quick_capture_default_tag
+        .as_deref()
+        .map(str::trim)
+        && !tag.is_empty()
+    {
+        let tag_text = if tag.starts_with('#') {
+            tag.to_string()
+        } else {
+            format!("#{tag}")
+        };
+        if !content.contains(&tag_text) {
+            content.push(' ');
+            content.push_str(&tag_text);
+        }
+    }
+
+    if storage::append_entry(&app.config.data.log_path, &content).is_ok() {
+        app.update_logs();
+        app.toast("Captured.");
+    } else {
+        app.toast("Failed to capture.");
+    }
+
+    app.reset_quick_capture();
+    if !keep_open {
+        app.show_quick_capture = false;
+    }
 }
 
 fn handle_discard_popup(app: &mut App, key: KeyEvent) {

@@ -135,6 +135,38 @@ pub fn render_activity_popup(f: &mut Frame, app: &App) {
     f.render_widget(List::new(items), inner_area);
 }
 
+pub fn render_quick_capture_popup(f: &mut Frame, app: &mut App) {
+    let tokens = ThemeTokens::from_theme(&app.config.theme);
+    let block = Block::default()
+        .title(" ⚡ Quick Capture ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(tokens.ui_border_default));
+    let area = centered_rect(70, 20, f.area());
+    let inner = block.inner(area);
+    f.render_widget(Clear, area);
+    f.render_widget(block, area);
+
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Length(1)])
+        .margin(1)
+        .split(inner);
+
+    app.quick_capture_textarea.set_block(Block::default());
+    app.quick_capture_textarea
+        .set_cursor_style(Style::default().add_modifier(Modifier::REVERSED));
+    f.render_widget(&app.quick_capture_textarea, layout[0]);
+
+    let help = Paragraph::new("Enter: save · Ctrl+Enter: save & continue · Esc: cancel")
+        .style(Style::default().fg(tokens.ui_muted));
+    f.render_widget(help, layout[1]);
+
+    let (row, col) = app.quick_capture_textarea.cursor();
+    let cursor_x = layout[0].x.saturating_add(col as u16);
+    let cursor_y = layout[0].y.saturating_add(row as u16);
+    f.set_cursor_position((cursor_x, cursor_y));
+}
+
 pub fn render_mood_popup(f: &mut Frame, app: &mut App) {
     let block = Block::default()
         .title(" Mood Check-in ")
@@ -295,6 +327,7 @@ pub fn render_help_popup(f: &mut Frame, app: &App) {
                 ("Focus timeline", fmt_keys(&kb.global.focus_timeline)),
                 ("Focus tasks", fmt_keys(&kb.global.focus_tasks)),
                 ("Compose", fmt_keys(&kb.global.focus_composer)),
+                ("Quick capture", fmt_keys(&kb.global.quick_capture)),
                 ("Search", fmt_keys(&kb.global.search)),
                 ("Tags", fmt_keys(&kb.global.tags)),
                 ("Pomodoro", fmt_keys(&kb.global.pomodoro)),

@@ -26,6 +26,9 @@ pub fn handle_normal_mode(app: &mut App, key: KeyEvent) {
         };
     } else if key_match(&key, &app.config.keybindings.global.focus_composer) {
         app.transition_to(InputMode::Editing);
+    } else if key_match(&key, &app.config.keybindings.global.quick_capture) {
+        app.reset_quick_capture();
+        app.show_quick_capture = true;
     } else if key_match(&key, &app.config.keybindings.global.search) {
         app.transition_to(InputMode::Search);
     } else if key_match(&key, &app.config.keybindings.global.jump_to_now) {

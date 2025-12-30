@@ -91,6 +91,8 @@ pub struct App<'a> {
     pub show_tag_popup: bool,
     pub tags: Vec<(String, usize)>,
     pub tag_list_state: ListState,
+    pub show_quick_capture: bool,
+    pub quick_capture_textarea: TextArea<'a>,
     pub is_search_result: bool,
     pub should_quit: bool,
     pub show_discard_popup: bool,
@@ -150,6 +152,9 @@ impl<'a> App<'a> {
 
         let mut textarea = TextArea::default();
         textarea.set_placeholder_text(PLACEHOLDER_COMPOSE);
+
+        let mut quick_capture_textarea = TextArea::default();
+        quick_capture_textarea.set_placeholder_text("Quick capture…");
 
         // Load logs from the past week (or earliest available)
         let start_date = today - Duration::days(INITIAL_LOAD_DAYS - 1);
@@ -249,6 +254,8 @@ impl<'a> App<'a> {
             show_tag_popup: false,
             tags: Vec::new(),
             tag_list_state: ListState::default(),
+            show_quick_capture: false,
+            quick_capture_textarea,
             is_search_result: false,
             should_quit: false,
             show_discard_popup: false,
@@ -685,6 +692,12 @@ impl<'a> App<'a> {
         {
             self.now_task = None;
         }
+    }
+
+    pub fn reset_quick_capture(&mut self) {
+        let mut textarea = TextArea::default();
+        textarea.set_placeholder_text("Quick capture…");
+        self.quick_capture_textarea = textarea;
     }
 
     pub fn transition_to(&mut self, mode: InputMode) {
