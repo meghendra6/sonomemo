@@ -124,7 +124,15 @@ pub(crate) fn handle_editor_normal(app: &mut App, key: event::KeyEvent) {
             let count = take_count_or_one(app);
             move_left(app, count);
         }
+        KeyCode::Left => {
+            let count = take_count_or_one(app);
+            move_left(app, count);
+        }
         KeyCode::Char('j') => {
+            let count = take_count_or_one(app);
+            move_down(app, count);
+        }
+        KeyCode::Down => {
             let count = take_count_or_one(app);
             move_down(app, count);
         }
@@ -132,7 +140,15 @@ pub(crate) fn handle_editor_normal(app: &mut App, key: event::KeyEvent) {
             let count = take_count_or_one(app);
             move_up(app, count);
         }
+        KeyCode::Up => {
+            let count = take_count_or_one(app);
+            move_up(app, count);
+        }
         KeyCode::Char('l') => {
+            let count = take_count_or_one(app);
+            move_right(app, count);
+        }
+        KeyCode::Right => {
             let count = take_count_or_one(app);
             move_right(app, count);
         }
@@ -304,7 +320,15 @@ pub(crate) fn handle_editor_visual(app: &mut App, key: event::KeyEvent, kind: Vi
             let count = take_count_or_one(app);
             move_left(app, count);
         }
+        KeyCode::Left => {
+            let count = take_count_or_one(app);
+            move_left(app, count);
+        }
         KeyCode::Char('j') => {
+            let count = take_count_or_one(app);
+            move_down(app, count);
+        }
+        KeyCode::Down => {
             let count = take_count_or_one(app);
             move_down(app, count);
         }
@@ -312,7 +336,15 @@ pub(crate) fn handle_editor_visual(app: &mut App, key: event::KeyEvent, kind: Vi
             let count = take_count_or_one(app);
             move_up(app, count);
         }
+        KeyCode::Up => {
+            let count = take_count_or_one(app);
+            move_up(app, count);
+        }
         KeyCode::Char('l') => {
+            let count = take_count_or_one(app);
+            move_right(app, count);
+        }
+        KeyCode::Right => {
             let count = take_count_or_one(app);
             move_right(app, count);
         }

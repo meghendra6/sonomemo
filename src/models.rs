@@ -8,18 +8,6 @@ pub enum InputMode {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum AgendaView {
-    List,
-    Timeline,
-}
-
-impl Default for AgendaView {
-    fn default() -> Self {
-        AgendaView::List
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum DatePickerField {
     Scheduled,
     Due,
@@ -45,6 +33,7 @@ pub enum VisualKind {
 #[derive(Clone, Copy, PartialEq)]
 pub enum NavigateFocus {
     Timeline,
+    Agenda,
     Tasks,
 }
 
@@ -147,7 +136,7 @@ pub struct AgendaItem {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum AgendaItemKind {
     Task,
-    Log,
+    Note,
 }
 
 #[derive(Clone)]
@@ -196,6 +185,16 @@ impl Priority {
             Priority::Medium => 'B',
             Priority::Low => 'C',
         }
+    }
+}
+
+impl TaskSchedule {
+    pub fn is_empty(&self) -> bool {
+        self.scheduled.is_none()
+            && self.due.is_none()
+            && self.start.is_none()
+            && self.time.is_none()
+            && self.duration_minutes.is_none()
     }
 }
 

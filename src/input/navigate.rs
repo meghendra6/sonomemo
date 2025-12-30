@@ -4,7 +4,8 @@ use crate::{
     config::key_match,
     models::{self, InputMode},
 };
-use crossterm::event::{KeyCode, KeyEvent};
+use chrono::Local;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 pub fn handle_normal_mode(app: &mut App, key: KeyEvent) {
     if app.navigate_focus == models::NavigateFocus::Timeline
@@ -21,17 +22,52 @@ pub fn handle_normal_mode(app: &mut App, key: KeyEvent) {
         actions::open_tag_popup(app);
     } else if key_match(&key, &app.config.keybindings.global.quit) {
         app.quit();
-    } else if key_match(&key, &app.config.keybindings.global.focus_tasks) {
-        app.navigate_focus = models::NavigateFocus::Tasks;
-    } else if key_match(&key, &app.config.keybindings.global.focus_timeline) {
-        app.navigate_focus = models::NavigateFocus::Timeline;
+    } else if key.modifiers.contains(KeyModifiers::CONTROL) {
+        let handled = match key.code {
+            KeyCode::Char('h')
+                if matches!(
+                    app.navigate_focus,
+                    models::NavigateFocus::Agenda | models::NavigateFocus::Tasks
+                ) =>
+            {
+                app.set_navigate_focus(models::NavigateFocus::Timeline);
+                true
+            }
+            KeyCode::Char('j') if app.navigate_focus == models::NavigateFocus::Agenda => {
+                app.set_navigate_focus(models::NavigateFocus::Tasks);
+                true
+            }
+            KeyCode::Char('k') if app.navigate_focus == models::NavigateFocus::Tasks => {
+                app.set_navigate_focus(models::NavigateFocus::Agenda);
+                true
+            }
+            KeyCode::Char('l') if app.navigate_focus == models::NavigateFocus::Timeline => {
+                let next_focus = if app.last_navigate_focus
+                    == Some(models::NavigateFocus::Tasks)
+                {
+                    models::NavigateFocus::Tasks
+                } else {
+                    models::NavigateFocus::Agenda
+                };
+                app.set_navigate_focus(next_focus);
+                true
+            }
+            _ => false,
+        };
+        if handled {
+            return;
+        }
+    } else if key_match(&key, &app.config.keybindings.global.agenda) {
+        actions::focus_agenda_panel(app);
     } else if key_match(&key, &app.config.keybindings.global.focus_next)
         || key_match(&key, &app.config.keybindings.global.focus_prev)
     {
-        app.navigate_focus = match app.navigate_focus {
-            models::NavigateFocus::Timeline => models::NavigateFocus::Tasks,
+        let next_focus = match app.navigate_focus {
+            models::NavigateFocus::Timeline => models::NavigateFocus::Agenda,
+            models::NavigateFocus::Agenda => models::NavigateFocus::Tasks,
             models::NavigateFocus::Tasks => models::NavigateFocus::Timeline,
         };
+        app.set_navigate_focus(next_focus);
     } else if key_match(&key, &app.config.keybindings.global.focus_composer) {
         app.transition_to(InputMode::Editing);
     } else if key_match(&key, &app.config.keybindings.global.search) {
@@ -135,6 +171,51 @@ pub fn handle_normal_mode(app: &mut App, key: KeyEvent) {
         && key_match(&key, &app.config.keybindings.timeline.toggle_todo)
     {
         actions::toggle_todo_in_timeline(app);
+    } else if app.navigate_focus == models::NavigateFocus::Agenda
+        && key_match(&key, &app.config.keybindings.agenda.up)
+    {
+        app.agenda_move_selection(-1);
+    } else if app.navigate_focus == models::NavigateFocus::Agenda
+        && key_match(&key, &app.config.keybindings.agenda.down)
+    {
+        app.agenda_move_selection(1);
+    } else if app.navigate_focus == models::NavigateFocus::Agenda
+        && key_match(&key, &app.config.keybindings.agenda.open)
+    {
+        actions::open_agenda_preview(app);
+    } else if app.navigate_focus == models::NavigateFocus::Agenda
+        && key_match(&key, &app.config.keybindings.agenda.toggle)
+    {
+        actions::toggle_agenda_task(app);
+    } else if app.navigate_focus == models::NavigateFocus::Agenda
+        && key_match(&key, &app.config.keybindings.agenda.filter)
+    {
+        app.cycle_agenda_filter();
+        app.set_agenda_selected_day(app.agenda_selected_day);
+    } else if app.navigate_focus == models::NavigateFocus::Agenda
+        && key_match(&key, &app.config.keybindings.agenda.toggle_unscheduled)
+    {
+        app.toggle_agenda_unscheduled();
+    } else if app.navigate_focus == models::NavigateFocus::Agenda
+        && key_match(&key, &app.config.keybindings.agenda.prev_day)
+    {
+        app.set_agenda_selected_day(app.agenda_selected_day - chrono::Duration::days(1));
+    } else if app.navigate_focus == models::NavigateFocus::Agenda
+        && key_match(&key, &app.config.keybindings.agenda.next_day)
+    {
+        app.set_agenda_selected_day(app.agenda_selected_day + chrono::Duration::days(1));
+    } else if app.navigate_focus == models::NavigateFocus::Agenda
+        && key_match(&key, &app.config.keybindings.agenda.prev_week)
+    {
+        app.set_agenda_selected_day(app.agenda_selected_day - chrono::Duration::days(7));
+    } else if app.navigate_focus == models::NavigateFocus::Agenda
+        && key_match(&key, &app.config.keybindings.agenda.next_week)
+    {
+        app.set_agenda_selected_day(app.agenda_selected_day + chrono::Duration::days(7));
+    } else if app.navigate_focus == models::NavigateFocus::Agenda
+        && key_match(&key, &app.config.keybindings.agenda.today)
+    {
+        app.set_agenda_selected_day(Local::now().date_naive());
     } else if app.navigate_focus == models::NavigateFocus::Tasks
         && key_match(&key, &app.config.keybindings.tasks.toggle)
     {
@@ -150,8 +231,6 @@ pub fn handle_normal_mode(app: &mut App, key: KeyEvent) {
         actions::open_or_toggle_pomodoro_for_selected_task(app);
     } else if key_match(&key, &app.config.keybindings.global.activity) {
         actions::open_activity_popup(app);
-    } else if key_match(&key, &app.config.keybindings.global.agenda) {
-        actions::open_agenda_popup(app);
     } else if key_match(&key, &app.config.keybindings.global.log_dir) {
         app.show_path_popup = true;
     } else if key_match(&key, &app.config.keybindings.global.theme_switcher) {

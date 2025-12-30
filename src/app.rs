@@ -1,7 +1,7 @@
 use crate::config::{Config, Theme};
 use crate::models::{
-    AgendaView, DatePickerField, EditorMode, EntryIdentity, FoldOverride, FoldState, InputMode,
-    LogEntry, NavigateFocus, PomodoroTarget, Priority, TaskFilter, TaskItem, TaskSchedule,
+    DatePickerField, EditorMode, EntryIdentity, FoldOverride, FoldState, InputMode, LogEntry,
+    NavigateFocus, PomodoroTarget, Priority, TaskFilter, TaskItem, TaskSchedule,
     count_trailing_tomatoes, is_heading_timestamp_line, split_timestamp_line, strip_timestamp_prefix,
 };
 use crate::storage;
@@ -49,6 +49,7 @@ pub enum PendingEditCommand {
 pub struct App<'a> {
     pub input_mode: InputMode,
     pub navigate_focus: NavigateFocus,
+    pub last_navigate_focus: Option<NavigateFocus>,
     pub textarea: TextArea<'a>,
     pub textarea_viewport_row: u16,
     pub textarea_viewport_col: u16,
@@ -91,13 +92,12 @@ pub struct App<'a> {
     pub show_tag_popup: bool,
     pub tags: Vec<(String, usize)>,
     pub tag_list_state: ListState,
-    pub show_agenda_popup: bool,
     pub agenda_all_items: Vec<crate::models::AgendaItem>,
     pub agenda_items: Vec<crate::models::AgendaItem>,
     pub agenda_state: ListState,
-    pub agenda_view: AgendaView,
     pub agenda_selected_day: NaiveDate,
     pub agenda_filter: TaskFilter,
+    pub agenda_show_unscheduled: bool,
     pub show_date_picker_popup: bool,
     pub date_picker_field: DatePickerField,
     pub date_picker_schedule: TaskSchedule,
@@ -129,6 +129,10 @@ pub struct App<'a> {
     pub show_pomodoro_popup: bool,
     pub pomodoro_minutes_input: String,
     pub pomodoro_pending_task: Option<TaskItem>,
+
+    pub show_memo_preview_popup: bool,
+    pub memo_preview_entry: Option<LogEntry>,
+    pub memo_preview_scroll: usize,
 
     // Pomodoro completion alert (blocks input until expiry)
     pub pomodoro_alert_expiry: Option<DateTime<Local>>,
@@ -226,6 +230,7 @@ impl<'a> App<'a> {
         let mut app = App {
             input_mode,
             navigate_focus: NavigateFocus::Timeline,
+            last_navigate_focus: None,
             textarea,
             textarea_viewport_row: 0,
             textarea_viewport_col: 0,
@@ -267,13 +272,12 @@ impl<'a> App<'a> {
             show_tag_popup: false,
             tags: Vec::new(),
             tag_list_state: ListState::default(),
-            show_agenda_popup: false,
             agenda_all_items: Vec::new(),
             agenda_items: Vec::new(),
             agenda_state: ListState::default(),
-            agenda_view: AgendaView::default(),
             agenda_selected_day: today,
             agenda_filter: TaskFilter::Open,
+            agenda_show_unscheduled: false,
             show_date_picker_popup: false,
             date_picker_field: DatePickerField::Scheduled,
             date_picker_schedule: TaskSchedule::default(),
@@ -301,6 +305,9 @@ impl<'a> App<'a> {
             show_pomodoro_popup: false,
             pomodoro_minutes_input: String::new(),
             pomodoro_pending_task: None,
+            show_memo_preview_popup: false,
+            memo_preview_entry: None,
+            memo_preview_scroll: 0,
             pomodoro_alert_expiry: None,
             pomodoro_alert_message: None,
             toast_message: None,
@@ -318,6 +325,7 @@ impl<'a> App<'a> {
         };
 
         app.apply_task_filter(true);
+        app.refresh_agenda();
         app
     }
 
@@ -399,6 +407,8 @@ impl<'a> App<'a> {
             self.all_tasks = tasks;
             self.apply_task_filter(false);
         }
+
+        self.refresh_agenda();
 
         if !self.fold_overrides.is_empty() {
             let mut keep = std::collections::HashSet::new();
@@ -771,7 +781,7 @@ impl<'a> App<'a> {
             .agenda_all_items
             .iter()
             .filter(|item| match item.kind {
-                crate::models::AgendaItemKind::Log => true,
+                crate::models::AgendaItemKind::Note => true,
                 crate::models::AgendaItemKind::Task => match filter {
                     TaskFilter::Open => !item.is_done,
                     TaskFilter::Done => item.is_done,
@@ -806,11 +816,9 @@ impl<'a> App<'a> {
         self.apply_agenda_filter(true);
     }
 
-    pub fn toggle_agenda_view(&mut self) {
-        self.agenda_view = match self.agenda_view {
-            AgendaView::List => AgendaView::Timeline,
-            AgendaView::Timeline => AgendaView::List,
-        };
+    pub fn toggle_agenda_unscheduled(&mut self) {
+        self.agenda_show_unscheduled = !self.agenda_show_unscheduled;
+        self.set_agenda_selected_day(self.agenda_selected_day);
     }
 
     pub fn set_agenda_selected_day(&mut self, day: NaiveDate) {
@@ -829,16 +837,43 @@ impl<'a> App<'a> {
     }
 
     pub fn agenda_visible_indices(&self) -> Vec<usize> {
-        match self.agenda_view {
-            AgendaView::List => self
-                .agenda_items
-                .iter()
-                .enumerate()
-                .filter(|(_, item)| item.kind == crate::models::AgendaItemKind::Task)
-                .map(|(idx, _)| idx)
-                .collect(),
-            AgendaView::Timeline => agenda_timeline_indices(self),
+        agenda_timeline_indices(self)
+    }
+
+    pub fn agenda_filter_label(&self) -> &'static str {
+        match self.agenda_filter {
+            TaskFilter::Open => "Open",
+            TaskFilter::Done => "Done",
+            TaskFilter::All => "All",
         }
+    }
+
+    pub fn refresh_agenda(&mut self) {
+        let today = Local::now().date_naive();
+        let start = today - Duration::days(3650);
+        let end = today + Duration::days(3650);
+        let items =
+            storage::read_agenda_entries(&self.config.data.log_path, start, end)
+                .unwrap_or_default();
+        self.agenda_all_items = items;
+        self.apply_agenda_filter(true);
+        self.set_agenda_selected_day(self.agenda_selected_day);
+    }
+
+    pub fn agenda_move_selection(&mut self, delta: i32) {
+        let visible = self.agenda_visible_indices();
+        if visible.is_empty() {
+            self.agenda_state.select(None);
+            return;
+        }
+
+        let current = self.agenda_state.selected();
+        let pos = current
+            .and_then(|idx| visible.iter().position(|i| *i == idx))
+            .unwrap_or(0);
+        let len = visible.len() as i32;
+        let next = (pos as i32 + delta).rem_euclid(len) as usize;
+        self.agenda_state.select(Some(visible[next]));
     }
 
     pub fn open_date_picker(&mut self) {
@@ -931,6 +966,14 @@ impl<'a> App<'a> {
         }
     }
 
+    pub fn set_navigate_focus(&mut self, focus: NavigateFocus) {
+        if self.navigate_focus == focus {
+            return;
+        }
+        self.last_navigate_focus = Some(self.navigate_focus);
+        self.navigate_focus = focus;
+    }
+
     pub fn transition_to(&mut self, mode: InputMode) {
         match mode {
             InputMode::Navigate => {
@@ -939,15 +982,18 @@ impl<'a> App<'a> {
                     self.textarea = TextArea::default();
                 }
                 self.textarea.set_placeholder_text(PLACEHOLDER_NAVIGATE);
-                if self.navigate_focus != NavigateFocus::Tasks {
-                    self.navigate_focus = NavigateFocus::Timeline;
+                if !matches!(
+                    self.navigate_focus,
+                    NavigateFocus::Tasks | NavigateFocus::Agenda
+                ) {
+                    self.set_navigate_focus(NavigateFocus::Timeline);
                 }
                 self.composer_dirty = false;
                 self.reset_editor_state();
             }
             InputMode::Editing => {
                 self.textarea.set_placeholder_text(PLACEHOLDER_COMPOSE);
-                self.navigate_focus = NavigateFocus::Timeline;
+                self.set_navigate_focus(NavigateFocus::Timeline);
                 self.textarea_viewport_row = 0;
                 self.textarea_viewport_col = 0;
                 self.textarea_viewport_height = 0;
@@ -1194,10 +1240,9 @@ fn agenda_sort_key(
         && item.schedule.due.unwrap_or(today) < today
         && !item.is_done;
     let overdue_rank = if is_overdue { 0 } else { 1 };
-    let kind_rank = if item.kind == crate::models::AgendaItemKind::Task {
-        0
-    } else {
-        1
+    let kind_rank = match item.kind {
+        crate::models::AgendaItemKind::Task => 0,
+        crate::models::AgendaItemKind::Note => 1,
     };
     let time = item
         .time
@@ -1210,6 +1255,7 @@ fn agenda_timeline_indices(app: &App) -> Vec<usize> {
     let mut overdue = Vec::new();
     let mut all_day = Vec::new();
     let mut timed = Vec::new();
+    let mut unscheduled = Vec::new();
 
     for (idx, item) in app.agenda_items.iter().enumerate() {
         match item.kind {
@@ -1221,6 +1267,12 @@ fn agenda_timeline_indices(app: &App) -> Vec<usize> {
                     overdue.push(idx);
                     continue;
                 }
+                if item.schedule.is_empty() {
+                    if app.agenda_show_unscheduled {
+                        unscheduled.push(idx);
+                    }
+                    continue;
+                }
                 if item.date != day {
                     continue;
                 }
@@ -1230,7 +1282,7 @@ fn agenda_timeline_indices(app: &App) -> Vec<usize> {
                     all_day.push(idx);
                 }
             }
-            crate::models::AgendaItemKind::Log => {
+            crate::models::AgendaItemKind::Note => {
                 if item.date != day {
                     continue;
                 }
@@ -1259,10 +1311,9 @@ fn agenda_timeline_indices(app: &App) -> Vec<usize> {
     });
     timed.sort_by_key(|idx| {
         let item = &app.agenda_items[*idx];
-        let kind_rank = if item.kind == crate::models::AgendaItemKind::Task {
-            0
-        } else {
-            1
+        let kind_rank = match item.kind {
+            crate::models::AgendaItemKind::Task => 0,
+            crate::models::AgendaItemKind::Note => 1,
         };
         (
             item.time.unwrap_or(time_min),
@@ -1272,10 +1323,16 @@ fn agenda_timeline_indices(app: &App) -> Vec<usize> {
         )
     });
 
+    unscheduled.sort_by_key(|idx| {
+        let item = &app.agenda_items[*idx];
+        (task_priority_rank(item.priority), item.line_number)
+    });
+
     let mut visible = Vec::new();
     visible.extend(overdue);
     visible.extend(all_day);
     visible.extend(timed);
+    visible.extend(unscheduled);
     visible
 }
 
