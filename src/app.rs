@@ -1,6 +1,7 @@
 use crate::config::{Config, Theme};
 use crate::models::{
-    EditorMode, InputMode, LogEntry, NavigateFocus, PomodoroTarget, TaskFilter, TaskItem,
+    EditorMode, InputMode, LogEntry, NavigateFocus, PomodoroTarget, TaskFilter, TaskIdentity,
+    TaskItem,
     count_trailing_tomatoes, is_heading_timestamp_line, split_timestamp_line,
     strip_timestamp_prefix,
 };
@@ -77,6 +78,7 @@ pub struct App<'a> {
     pub tasks: Vec<TaskItem>,
     pub tasks_state: ListState,
     pub task_filter: TaskFilter,
+    pub now_task: Option<TaskIdentity>,
     pub today_done_tasks: usize,
     pub today_tomatoes: usize,
     pub last_search_query: Option<String>,
@@ -234,6 +236,7 @@ impl<'a> App<'a> {
             tasks: Vec::new(),
             tasks_state,
             task_filter,
+            now_task: None,
             today_done_tasks,
             today_tomatoes,
             last_search_query: None,
@@ -362,6 +365,7 @@ impl<'a> App<'a> {
         if let Ok(tasks) = storage::read_today_tasks(&self.config.data.log_path) {
             self.all_tasks = tasks;
             self.apply_task_filter(false);
+            self.clear_now_task_if_missing();
         }
 
         // Calculate stats from today's logs only
@@ -665,6 +669,21 @@ impl<'a> App<'a> {
             TaskFilter::Open => "Open",
             TaskFilter::Done => "Done",
             TaskFilter::All => "All",
+        }
+    }
+
+    pub fn is_now_task(&self, task: &TaskItem) -> bool {
+        self.now_task
+            .as_ref()
+            .map(|now| now.matches(task))
+            .unwrap_or(false)
+    }
+
+    pub fn clear_now_task_if_missing(&mut self) {
+        if let Some(now) = self.now_task.as_ref()
+            && !self.all_tasks.iter().any(|task| now.matches(task))
+        {
+            self.now_task = None;
         }
     }
 

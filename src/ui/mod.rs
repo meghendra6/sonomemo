@@ -511,6 +511,8 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             .iter()
             .map(|task| {
                 let mut line = String::new();
+                let now_marker = if app.is_now_task(task) { "▶ " } else { "  " };
+                line.push_str(now_marker);
                 line.push_str(&"  ".repeat(task.indent));
                 if task.is_done {
                     line.push_str("- [x] ");

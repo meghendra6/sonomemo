@@ -41,19 +41,71 @@ pub fn complete_task_chain(app: &mut App) {
             app.toast("Task already done.");
             return;
         }
-        if let Ok(completed) = storage::complete_task_chain(&app.config.data.log_path, &task)
-            && task.carryover_from.is_some()
-            && completed > 0
-        {
-            let message = if completed == 1 {
-                "Completed 1 carry-over task".to_string()
-            } else {
-                format!("Completed {} carry-over tasks", completed)
-            };
-            app.toast(message);
+        if let Ok(completed) = storage::complete_task_chain(&app.config.data.log_path, &task) {
+            if app.is_now_task(&task) {
+                app.now_task = None;
+            }
+            if task.carryover_from.is_some() && completed > 0 {
+                let message = if completed == 1 {
+                    "Completed 1 carry-over task".to_string()
+                } else {
+                    format!("Completed {} carry-over tasks", completed)
+                };
+                app.toast(message);
+            }
         }
         app.update_logs();
     }
+}
+
+pub fn toggle_now_task(app: &mut App) {
+    let Some(i) = app.tasks_state.selected() else {
+        app.toast("No task selected.");
+        return;
+    };
+    let Some(task) = app.tasks.get(i) else {
+        app.toast("No task selected.");
+        return;
+    };
+    if task.is_done {
+        app.toast("Cannot mark done task as Now.");
+        return;
+    }
+
+    if app.is_now_task(task) {
+        app.now_task = None;
+        app.toast("Now task cleared.");
+        return;
+    }
+
+    app.now_task = Some(models::TaskIdentity::from(task));
+    app.toast(format!("Now: {}", task.text));
+}
+
+pub fn jump_to_now_task(app: &mut App) {
+    let Some(now) = app.now_task.clone() else {
+        app.toast("No Now task set.");
+        return;
+    };
+
+    if let Some(index) = app.tasks.iter().position(|task| now.matches(task)) {
+        app.navigate_focus = models::NavigateFocus::Tasks;
+        app.tasks_state.select(Some(index));
+        return;
+    }
+
+    if app.all_tasks.iter().any(|task| now.matches(task)) {
+        if app.task_filter != models::TaskFilter::Open {
+            app.set_task_filter(models::TaskFilter::Open);
+        }
+        if let Some(index) = app.tasks.iter().position(|task| now.matches(task)) {
+            app.navigate_focus = models::NavigateFocus::Tasks;
+            app.tasks_state.select(Some(index));
+            return;
+        }
+    }
+
+    app.toast("Now task not found.");
 }
 
 pub fn open_activity_popup(app: &mut App) {

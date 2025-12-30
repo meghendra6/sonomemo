@@ -28,6 +28,8 @@ pub fn handle_normal_mode(app: &mut App, key: KeyEvent) {
         app.transition_to(InputMode::Editing);
     } else if key_match(&key, &app.config.keybindings.global.search) {
         app.transition_to(InputMode::Search);
+    } else if key_match(&key, &app.config.keybindings.global.jump_to_now) {
+        actions::jump_to_now_task(app);
     } else if app.navigate_focus == models::NavigateFocus::Timeline
         && key_match(&key, &app.config.keybindings.timeline.up)
     {
@@ -131,6 +133,10 @@ pub fn handle_normal_mode(app: &mut App, key: KeyEvent) {
         && key_match(&key, &app.config.keybindings.tasks.toggle)
     {
         actions::complete_task_chain(app);
+    } else if app.navigate_focus == models::NavigateFocus::Tasks
+        && key_match(&key, &app.config.keybindings.tasks.mark_now)
+    {
+        actions::toggle_now_task(app);
     } else if (app.navigate_focus == models::NavigateFocus::Tasks
         && key_match(&key, &app.config.keybindings.tasks.start_pomodoro))
         || key_match(&key, &app.config.keybindings.global.pomodoro)

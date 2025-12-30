@@ -84,6 +84,31 @@ pub struct TaskItem {
     pub carryover_from: Option<String>,
 }
 
+#[derive(Clone, PartialEq)]
+pub struct TaskIdentity {
+    pub file_path: String,
+    pub line_number: usize,
+    pub identity: String,
+}
+
+impl TaskIdentity {
+    pub fn matches(&self, task: &TaskItem) -> bool {
+        self.file_path == task.file_path
+            && self.line_number == task.line_number
+            && self.identity == task.task_identity
+    }
+}
+
+impl From<&TaskItem> for TaskIdentity {
+    fn from(task: &TaskItem) -> Self {
+        Self {
+            file_path: task.file_path.clone(),
+            line_number: task.line_number,
+            identity: task.task_identity.clone(),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub enum PomodoroTarget {
     Task {

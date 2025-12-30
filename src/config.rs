@@ -212,6 +212,7 @@ pub struct GlobalBindings {
     pub activity: Vec<String>,
     pub log_dir: Vec<String>,
     pub pomodoro: Vec<String>,
+    pub jump_to_now: Vec<String>,
     pub theme_switcher: Vec<String>,
     pub editor_style_switcher: Vec<String>,
 }
@@ -231,6 +232,7 @@ impl Default for GlobalBindings {
             activity: vec!["g".to_string()],
             log_dir: vec!["o".to_string()],
             pomodoro: vec!["p".to_string()],
+            jump_to_now: vec!["shift+n".to_string()],
             theme_switcher: vec!["shift+t".to_string()],
             editor_style_switcher: vec!["shift+v".to_string()],
         }
@@ -278,6 +280,7 @@ pub struct TasksBindings {
     pub start_pomodoro: Vec<String>,
     pub open: Vec<String>,
     pub edit: Vec<String>,
+    pub mark_now: Vec<String>,
     pub filter_toggle: Vec<String>,
     pub filter_open: Vec<String>,
     pub filter_done: Vec<String>,
@@ -293,6 +296,7 @@ impl Default for TasksBindings {
             start_pomodoro: vec!["p".to_string()],
             open: vec!["enter".to_string()],
             edit: vec!["e".to_string()],
+            mark_now: vec!["n".to_string()],
             filter_toggle: vec!["f".to_string()],
             filter_open: vec!["1".to_string()],
             filter_done: vec!["2".to_string()],
