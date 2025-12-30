@@ -8,4 +8,3 @@ log_path = "logs"
 submit = ["ctrl+s", "ctrl+d"]
 newline = ["enter"]
 cancel = ["esc"]
-clear = ["ctrl+l"]

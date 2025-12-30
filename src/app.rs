@@ -96,7 +96,7 @@ pub struct App<'a> {
     pub agenda_state: ListState,
     pub is_search_result: bool,
     pub should_quit: bool,
-    pub show_discard_popup: bool,
+    pub show_exit_popup: bool,
     pub show_delete_entry_popup: bool,
     pub delete_entry_target: Option<LogEntry>,
 
@@ -258,7 +258,7 @@ impl<'a> App<'a> {
             agenda_state: ListState::default(),
             is_search_result: false,
             should_quit: false,
-            show_discard_popup: false,
+            show_exit_popup: false,
             show_delete_entry_popup: false,
             delete_entry_target: None,
             pomodoro_start: None,

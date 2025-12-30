@@ -24,8 +24,8 @@ pub mod theme;
 
 use components::{centered_column, parse_markdown_spans, wrap_markdown_line};
 use popups::{
-    render_activity_popup, render_agenda_popup, render_delete_entry_popup, render_discard_popup,
-    render_editor_style_popup, render_help_popup, render_mood_popup, render_path_popup,
+    render_activity_popup, render_agenda_popup, render_delete_entry_popup, render_editor_style_popup,
+    render_exit_popup, render_help_popup, render_mood_popup, render_path_popup,
     render_pomodoro_popup, render_siren_popup, render_tag_popup, render_theme_switcher_popup,
     render_todo_popup,
 };
@@ -803,7 +803,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                     Span::styled(results_hint, Style::default().fg(tokens.ui_muted)),
                     Span::raw("  "),
                     Span::styled(
-                        "Enter: apply · Esc: cancel · Ctrl+L: clear",
+                        "Enter: apply · Esc: cancel",
                         Style::default().fg(tokens.ui_muted),
                     ),
                 ]))
@@ -903,8 +903,8 @@ pub fn ui(f: &mut Frame, app: &mut App) {
     if app.show_delete_entry_popup {
         render_delete_entry_popup(f);
     }
-    if app.show_discard_popup {
-        render_discard_popup(f, app);
+    if app.show_exit_popup {
+        render_exit_popup(f, app);
     }
 
     if app.show_pomodoro_popup {

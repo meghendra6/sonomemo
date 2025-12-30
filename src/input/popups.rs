@@ -2,6 +2,7 @@ use crate::{
     actions,
     app::App,
     config::{self, EditorStyle, ThemePreset, config_path, key_match},
+    input::editing,
     models::{self, InputMode, Mood},
     storage,
 };
@@ -24,8 +25,8 @@ pub fn handle_popup_events(app: &mut App, key: KeyEvent) -> bool {
         return true;
     }
 
-    if app.show_discard_popup {
-        handle_discard_popup(app, key);
+    if app.show_exit_popup {
+        handle_exit_popup(app, key);
         return true;
     }
     if app.show_delete_entry_popup {
@@ -98,14 +99,21 @@ fn handle_agenda_popup(app: &mut App, key: KeyEvent) {
     }
 }
 
-fn handle_discard_popup(app: &mut App, key: KeyEvent) {
-    if key_match(&key, &app.config.keybindings.popup.confirm) {
-        app.editing_entry = None;
-        app.textarea = tui_textarea::TextArea::default();
-        app.transition_to(InputMode::Navigate);
-        app.show_discard_popup = false;
-    } else if key_match(&key, &app.config.keybindings.popup.cancel) || key.code == KeyCode::Esc {
-        app.show_discard_popup = false;
+fn handle_exit_popup(app: &mut App, key: KeyEvent) {
+    match key.code {
+        KeyCode::Char('y') | KeyCode::Char('Y') => {
+            app.show_exit_popup = false;
+            app.commit_insert_group();
+            editing::submit_composer(app);
+        }
+        KeyCode::Char('d') | KeyCode::Char('D') => {
+            app.show_exit_popup = false;
+            editing::discard_composer(app);
+        }
+        KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+            app.show_exit_popup = false;
+        }
+        _ => {}
     }
 }
 

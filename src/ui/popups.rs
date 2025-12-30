@@ -556,9 +556,9 @@ fn visual_help_lines(kind: VisualKind, tokens: &ThemeTokens) -> Vec<Line<'static
     ]
 }
 
-pub fn render_discard_popup(f: &mut Frame, _app: &App) {
+pub fn render_exit_popup(f: &mut Frame, _app: &App) {
     let block = Block::default()
-        .title(" Discard changes? ")
+        .title(" Exit composer? ")
         .borders(Borders::ALL)
         .style(Style::default().fg(Color::Yellow));
     let area = centered_rect(50, 30, f.area());
@@ -571,11 +571,11 @@ pub fn render_discard_popup(f: &mut Frame, _app: &App) {
         .margin(2)
         .split(area);
 
-    let body = Paragraph::new("You have unsaved text.\nDiscard it and go back?")
+    let body = Paragraph::new("Save changes before leaving?")
         .style(Style::default().add_modifier(Modifier::BOLD))
         .wrap(ratatui::widgets::Wrap { trim: true });
 
-    let help_text = Paragraph::new("[y] Discard    [n] Keep editing")
+    let help_text = Paragraph::new("[y] Save & exit    [d] Discard    [n]/[Esc] Cancel")
         .style(Style::default().fg(Color::DarkGray));
 
     f.render_widget(body, text_area[0]);
