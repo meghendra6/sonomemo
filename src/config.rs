@@ -278,6 +278,10 @@ pub struct TasksBindings {
     pub start_pomodoro: Vec<String>,
     pub open: Vec<String>,
     pub edit: Vec<String>,
+    pub filter_toggle: Vec<String>,
+    pub filter_open: Vec<String>,
+    pub filter_done: Vec<String>,
+    pub filter_all: Vec<String>,
 }
 
 impl Default for TasksBindings {
@@ -289,6 +293,10 @@ impl Default for TasksBindings {
             start_pomodoro: vec!["p".to_string()],
             open: vec!["enter".to_string()],
             edit: vec!["e".to_string()],
+            filter_toggle: vec!["f".to_string()],
+            filter_open: vec!["1".to_string()],
+            filter_done: vec!["2".to_string()],
+            filter_all: vec!["3".to_string()],
         }
     }
 }

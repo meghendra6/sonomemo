@@ -25,6 +25,14 @@ pub enum NavigateFocus {
     Tasks,
 }
 
+#[derive(Clone, Copy, PartialEq, Default)]
+pub enum TaskFilter {
+    #[default]
+    Open,
+    Done,
+    All,
+}
+
 #[derive(Clone, Copy, PartialEq)]
 pub enum Mood {
     Happy,
@@ -71,6 +79,7 @@ pub struct TaskItem {
     pub tomato_count: usize,
     pub file_path: String,
     pub line_number: usize,
+    pub is_done: bool,
     pub task_identity: String,
     pub carryover_from: Option<String>,
 }

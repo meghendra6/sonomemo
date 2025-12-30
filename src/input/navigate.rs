@@ -87,6 +87,22 @@ pub fn handle_normal_mode(app: &mut App, key: KeyEvent) {
     {
         app.tasks_down();
     } else if app.navigate_focus == models::NavigateFocus::Tasks
+        && key_match(&key, &app.config.keybindings.tasks.filter_toggle)
+    {
+        app.cycle_task_filter();
+    } else if app.navigate_focus == models::NavigateFocus::Tasks
+        && key_match(&key, &app.config.keybindings.tasks.filter_open)
+    {
+        app.set_task_filter(models::TaskFilter::Open);
+    } else if app.navigate_focus == models::NavigateFocus::Tasks
+        && key_match(&key, &app.config.keybindings.tasks.filter_done)
+    {
+        app.set_task_filter(models::TaskFilter::Done);
+    } else if app.navigate_focus == models::NavigateFocus::Tasks
+        && key_match(&key, &app.config.keybindings.tasks.filter_all)
+    {
+        app.set_task_filter(models::TaskFilter::All);
+    } else if app.navigate_focus == models::NavigateFocus::Tasks
         && key_match(&key, &app.config.keybindings.tasks.edit)
     {
         if let Some(i) = app.tasks_state.selected()

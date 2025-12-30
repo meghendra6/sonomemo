@@ -277,20 +277,29 @@ fn parse_task_content(content: &str, path_str: &str) -> Vec<TaskItem> {
         let (indent_bytes, indent_spaces) = parse_indent(s);
         let s = &s[indent_bytes..];
 
-        if let Some(text) = s.strip_prefix("- [ ] ") {
-            let (text, tomato_count) = strip_trailing_tomatoes(text);
-            let text = text.trim();
-            let (task_identity, carryover_from) = task_identity_from_text(text);
-            tasks.push(TaskItem {
-                text: text.to_string(),
-                indent: indent_spaces.div_ceil(2),
-                tomato_count,
-                file_path: path_str.to_string(),
-                line_number: i,
-                task_identity,
-                carryover_from,
-            });
-        }
+        let (is_done, text) = if let Some(text) = s.strip_prefix("- [ ] ") {
+            (false, text)
+        } else if let Some(text) = s.strip_prefix("- [x] ") {
+            (true, text)
+        } else if let Some(text) = s.strip_prefix("- [X] ") {
+            (true, text)
+        } else {
+            continue;
+        };
+
+        let (text, tomato_count) = strip_trailing_tomatoes(text);
+        let text = text.trim();
+        let (task_identity, carryover_from) = task_identity_from_text(text);
+        tasks.push(TaskItem {
+            text: text.to_string(),
+            indent: indent_spaces.div_ceil(2),
+            tomato_count,
+            file_path: path_str.to_string(),
+            line_number: i,
+            is_done,
+            task_identity,
+            carryover_from,
+        });
     }
 
     tasks

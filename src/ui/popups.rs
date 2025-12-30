@@ -326,6 +326,10 @@ pub fn render_help_popup(f: &mut Frame, app: &App) {
                 ("Toggle", fmt_keys(&kb.tasks.toggle)),
                 ("Pomodoro", fmt_keys(&kb.tasks.start_pomodoro)),
                 ("Edit", fmt_keys(&kb.tasks.edit)),
+                ("Filter toggle", fmt_keys(&kb.tasks.filter_toggle)),
+                ("Filter open", fmt_keys(&kb.tasks.filter_open)),
+                ("Filter done", fmt_keys(&kb.tasks.filter_done)),
+                ("Filter all", fmt_keys(&kb.tasks.filter_all)),
             ],
         ),
         (

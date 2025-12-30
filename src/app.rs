@@ -1,6 +1,6 @@
 use crate::config::{Config, Theme};
 use crate::models::{
-    EditorMode, InputMode, LogEntry, NavigateFocus, PomodoroTarget, TaskItem,
+    EditorMode, InputMode, LogEntry, NavigateFocus, PomodoroTarget, TaskFilter, TaskItem,
     count_trailing_tomatoes, is_heading_timestamp_line, split_timestamp_line,
     strip_timestamp_prefix,
 };
@@ -73,8 +73,10 @@ pub struct App<'a> {
     /// UI-space list state for Timeline (includes date separators, preserves offset across frames).
     pub timeline_ui_state: ListState,
     pub editing_entry: Option<EditingEntry>,
+    pub all_tasks: Vec<TaskItem>,
     pub tasks: Vec<TaskItem>,
     pub tasks_state: ListState,
+    pub task_filter: TaskFilter,
     pub today_done_tasks: usize,
     pub today_tomatoes: usize,
     pub last_search_query: Option<String>,
@@ -164,11 +166,10 @@ impl<'a> App<'a> {
             logs_state.select(Some(logs.len() - 1));
         }
 
-        let tasks = storage::read_today_tasks(&config.data.log_path).unwrap_or_else(|_| Vec::new());
-        let mut tasks_state = ListState::default();
-        if !tasks.is_empty() {
-            tasks_state.select(Some(0));
-        }
+        let all_tasks =
+            storage::read_today_tasks(&config.data.log_path).unwrap_or_else(|_| Vec::new());
+        let tasks_state = ListState::default();
+        let task_filter = TaskFilter::Open;
 
         // Check if mood has already been logged today
         let today_logs =
@@ -203,7 +204,7 @@ impl<'a> App<'a> {
         // Calculate today's stats from today's logs only
         let (today_done_tasks, today_tomatoes) = compute_today_task_stats(&today_logs);
 
-        App {
+        let mut app = App {
             input_mode,
             navigate_focus: NavigateFocus::Timeline,
             textarea,
@@ -229,8 +230,10 @@ impl<'a> App<'a> {
             logs_state,
             timeline_ui_state: ListState::default(),
             editing_entry: None,
-            tasks,
+            all_tasks,
+            tasks: Vec::new(),
             tasks_state,
+            task_filter,
             today_done_tasks,
             today_tomatoes,
             last_search_query: None,
@@ -276,7 +279,10 @@ impl<'a> App<'a> {
             selected_entry_line_count: 0,
             timeline_viewport_height: 0,
             config,
-        }
+        };
+
+        app.apply_task_filter(true);
+        app
     }
 
     pub fn start_edit_entry(&mut self, entry: &LogEntry) {
@@ -354,14 +360,8 @@ impl<'a> App<'a> {
         }
 
         if let Ok(tasks) = storage::read_today_tasks(&self.config.data.log_path) {
-            self.tasks = tasks;
-            if self.tasks.is_empty() {
-                self.tasks_state.select(None);
-            } else if self.tasks_state.selected().is_none() {
-                self.tasks_state.select(Some(0));
-            } else if let Some(i) = self.tasks_state.selected() {
-                self.tasks_state.select(Some(i.min(self.tasks.len() - 1)));
-            }
+            self.all_tasks = tasks;
+            self.apply_task_filter(false);
         }
 
         // Calculate stats from today's logs only
@@ -599,6 +599,73 @@ impl<'a> App<'a> {
             None => 0,
         };
         self.tasks_state.select(Some(i));
+    }
+
+    pub fn apply_task_filter(&mut self, reset_selection: bool) {
+        self.tasks = match self.task_filter {
+            TaskFilter::Open => self
+                .all_tasks
+                .iter()
+                .filter(|task| !task.is_done)
+                .cloned()
+                .collect(),
+            TaskFilter::Done => self
+                .all_tasks
+                .iter()
+                .filter(|task| task.is_done)
+                .cloned()
+                .collect(),
+            TaskFilter::All => self.all_tasks.clone(),
+        };
+
+        if self.tasks.is_empty() {
+            self.tasks_state.select(None);
+            return;
+        }
+
+        if reset_selection || self.tasks_state.selected().is_none() {
+            self.tasks_state.select(Some(0));
+        } else if let Some(i) = self.tasks_state.selected() {
+            self.tasks_state.select(Some(i.min(self.tasks.len() - 1)));
+        }
+    }
+
+    pub fn set_task_filter(&mut self, filter: TaskFilter) {
+        if self.task_filter == filter {
+            return;
+        }
+        self.task_filter = filter;
+        self.apply_task_filter(true);
+    }
+
+    pub fn cycle_task_filter(&mut self) {
+        self.task_filter = match self.task_filter {
+            TaskFilter::Open => TaskFilter::Done,
+            TaskFilter::Done => TaskFilter::All,
+            TaskFilter::All => TaskFilter::Open,
+        };
+        self.apply_task_filter(true);
+    }
+
+    pub fn task_counts(&self) -> (usize, usize) {
+        let mut open = 0usize;
+        let mut done = 0usize;
+        for task in &self.all_tasks {
+            if task.is_done {
+                done += 1;
+            } else {
+                open += 1;
+            }
+        }
+        (open, done)
+    }
+
+    pub fn task_filter_label(&self) -> &'static str {
+        match self.task_filter {
+            TaskFilter::Open => "Open",
+            TaskFilter::Done => "Done",
+            TaskFilter::All => "All",
+        }
     }
 
     pub fn transition_to(&mut self, mode: InputMode) {

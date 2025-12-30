@@ -37,6 +37,10 @@ pub fn complete_task_chain(app: &mut App) {
         && i < app.tasks.len()
     {
         let task = app.tasks[i].clone();
+        if task.is_done {
+            app.toast("Task already done.");
+            return;
+        }
         if let Ok(completed) = storage::complete_task_chain(&app.config.data.log_path, &task)
             && task.carryover_from.is_some()
             && completed > 0
@@ -113,6 +117,10 @@ pub fn open_or_toggle_pomodoro_for_selected_task(app: &mut App) {
     }
 
     let task = app.tasks[i].clone();
+    if task.is_done {
+        app.toast("Cannot start pomodoro on done task.");
+        return;
+    }
 
     if let Some(models::PomodoroTarget::Task {
         file_path,

@@ -334,10 +334,11 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             "📅 N/A".to_string()
         };
 
-        let task_summary = if app.tasks.is_empty() {
+        let (open_count, done_count) = app.task_counts();
+        let task_summary = if open_count + done_count == 0 {
             "Tasks 0".to_string()
         } else {
-            format!("Tasks {} ({}✓)", app.tasks.len(), app.today_done_tasks)
+            format!("Tasks {} ({}✓)", open_count, done_count)
         };
 
         let stats_summary = format!(
@@ -511,7 +512,11 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             .map(|task| {
                 let mut line = String::new();
                 line.push_str(&"  ".repeat(task.indent));
-                line.push_str("- [ ] ");
+                if task.is_done {
+                    line.push_str("- [x] ");
+                } else {
+                    line.push_str("- [ ] ");
+                }
                 line.push_str(&task.text);
 
                 let is_active_pomodoro = if let (
@@ -596,13 +601,14 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             })
             .collect();
 
+        let (open_count, done_count) = app.task_counts();
         let tasks_summary = format!(
             "Open {} · Done {} · 🍅 {}",
-            app.tasks.len(),
-            app.today_done_tasks,
-            app.today_tomatoes
+            open_count, done_count, app.today_tomatoes
         );
-        let tasks_title_text = format!("TASKS — {tasks_summary}");
+        let filter_label = app.task_filter_label();
+        let filter_summary = format!("{filter_label}: {}", app.tasks.len());
+        let tasks_title_text = format!("TASKS ({filter_summary}) — {tasks_summary}");
         let tasks_title = truncate(
             &tasks_title_text,
             tasks_area.width.saturating_sub(4) as usize,
