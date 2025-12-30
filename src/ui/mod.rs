@@ -186,9 +186,28 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                 0
             };
 
+            let total_display_lines = app.entry_display_line_count(entry);
+            let visible_raw_limit = app.entry_fold_limit(entry).unwrap_or(total_display_lines);
+            let is_folded = total_display_lines > visible_raw_limit;
+            let show_marker = total_display_lines > 1;
+            let fold_marker = if show_marker {
+                if is_folded {
+                    "▶ "
+                } else {
+                    "▼ "
+                }
+            } else {
+                ""
+            };
+            let marker_width = if show_marker { 2 } else { 0 };
+            let mut displayed_raw = 0usize;
+
             for (line_idx, raw_line) in entry.content.lines().enumerate() {
                 if heading_timestamp_prefix.is_some() && line_idx == 0 {
                     continue;
+                }
+                if displayed_raw >= visible_raw_limit {
+                    break;
                 }
 
                 let (ts_prefix, content_line) =
@@ -207,7 +226,13 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                 let is_fence = content_line.trim_start().starts_with("```");
                 let line_in_code_block = in_code_block || is_fence;
 
-                let wrapped = wrap_markdown_line(content_line, content_width);
+                let is_first_visible = displayed_raw == 0;
+                let wrap_width = if is_first_visible {
+                    content_width.saturating_sub(marker_width).max(1)
+                } else {
+                    content_width.max(1)
+                };
+                let wrapped = wrap_markdown_line(content_line, wrap_width);
                 for (wrap_idx, wline) in wrapped.iter().enumerate() {
                     let mut spans = Vec::new();
 
@@ -239,6 +264,12 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                         spans.push(ts_span);
                     }
 
+                    if is_first_visible && wrap_idx == 0 && show_marker {
+                        spans.push(Span::styled(
+                            fold_marker.to_string(),
+                            Style::default().fg(tokens.ui_muted),
+                        ));
+                    }
                     spans.extend(parse_markdown_spans(
                         wline,
                         &app.config.theme,
@@ -251,6 +282,13 @@ pub fn ui(f: &mut Frame, app: &mut App) {
 
                 if is_fence {
                     in_code_block = !in_code_block;
+                }
+                displayed_raw += 1;
+            }
+
+            if is_folded && !lines.is_empty() {
+                if let Some(last) = lines.last_mut() {
+                    last.spans.push(Span::raw(" ..."));
                 }
             }
 

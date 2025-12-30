@@ -1,8 +1,8 @@
 use crate::config::{Config, Theme};
 use crate::models::{
-    EditorMode, InputMode, LogEntry, NavigateFocus, PomodoroTarget, TaskFilter, TaskItem,
-    count_trailing_tomatoes, is_heading_timestamp_line, split_timestamp_line,
-    strip_timestamp_prefix,
+    EditorMode, EntryIdentity, FoldOverride, FoldState, InputMode, LogEntry, NavigateFocus,
+    PomodoroTarget, TaskFilter, TaskItem, count_trailing_tomatoes, is_heading_timestamp_line,
+    split_timestamp_line, strip_timestamp_prefix,
 };
 use crate::storage;
 use chrono::{DateTime, Duration, Local, NaiveDate};
@@ -73,6 +73,8 @@ pub struct App<'a> {
     /// UI-space list state for Timeline (includes date separators, preserves offset across frames).
     pub timeline_ui_state: ListState,
     pub editing_entry: Option<EditingEntry>,
+    pub fold_state: FoldState,
+    pub fold_overrides: HashMap<EntryIdentity, FoldOverride>,
     pub all_tasks: Vec<TaskItem>,
     pub tasks: Vec<TaskItem>,
     pub tasks_state: ListState,
@@ -230,6 +232,8 @@ impl<'a> App<'a> {
             logs_state,
             timeline_ui_state: ListState::default(),
             editing_entry: None,
+            fold_state: FoldState::default(),
+            fold_overrides: HashMap::new(),
             all_tasks,
             tasks: Vec::new(),
             tasks_state,
@@ -362,6 +366,14 @@ impl<'a> App<'a> {
         if let Ok(tasks) = storage::read_today_tasks(&self.config.data.log_path) {
             self.all_tasks = tasks;
             self.apply_task_filter(false);
+        }
+
+        if !self.fold_overrides.is_empty() {
+            let mut keep = std::collections::HashSet::new();
+            for entry in &self.logs {
+                keep.insert(EntryIdentity::from(entry));
+            }
+            self.fold_overrides.retain(|key, _| keep.contains(key));
         }
 
         // Calculate stats from today's logs only
@@ -599,6 +611,78 @@ impl<'a> App<'a> {
             None => 0,
         };
         self.tasks_state.select(Some(i));
+    }
+
+    pub fn toggle_entry_fold(&mut self) {
+        let Some(i) = self.logs_state.selected() else {
+            return;
+        };
+        let Some(entry) = self.logs.get(i) else {
+            return;
+        };
+        let total = self.entry_display_line_count(entry);
+        if total <= 1 {
+            return;
+        }
+
+        let is_folded = self.entry_is_folded(entry);
+        let key = EntryIdentity::from(entry);
+        let override_state = if is_folded {
+            FoldOverride::Expanded
+        } else {
+            FoldOverride::Folded
+        };
+        self.fold_overrides.insert(key, override_state);
+        self.entry_scroll_offset = 0;
+    }
+
+    pub fn cycle_fold_state(&mut self) {
+        self.fold_state = match self.fold_state {
+            FoldState::Overview => FoldState::Contents,
+            FoldState::Contents => FoldState::ShowAll,
+            FoldState::ShowAll => FoldState::Overview,
+        };
+        self.entry_scroll_offset = 0;
+    }
+
+    pub fn entry_fold_limit(&self, entry: &LogEntry) -> Option<usize> {
+        let total = self.entry_display_line_count(entry);
+        if total <= 1 {
+            return None;
+        }
+        if let Some(override_state) = self.fold_overrides.get(&EntryIdentity::from(entry)) {
+            return match override_state {
+                FoldOverride::Folded => Some(1),
+                FoldOverride::Expanded => None,
+            };
+        }
+        match self.fold_state {
+            FoldState::Overview => Some(1),
+            FoldState::Contents => Some(2),
+            FoldState::ShowAll => None,
+        }
+    }
+
+    pub fn entry_is_folded(&self, entry: &LogEntry) -> bool {
+        let total = self.entry_display_line_count(entry);
+        let limit = self.entry_fold_limit(entry);
+        match limit {
+            Some(n) => total > n,
+            None => false,
+        }
+    }
+
+    pub fn entry_display_line_count(&self, entry: &LogEntry) -> usize {
+        let mut count = entry.content.lines().count();
+        if entry
+            .content
+            .lines()
+            .next()
+            .is_some_and(is_heading_timestamp_line)
+        {
+            count = count.saturating_sub(1);
+        }
+        count.max(1)
     }
 
     pub fn apply_task_filter(&mut self, reset_selection: bool) {
