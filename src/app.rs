@@ -1,11 +1,11 @@
 use crate::config::{Config, Theme};
 use crate::models::{
-    EditorMode, EntryIdentity, FoldOverride, FoldState, InputMode, LogEntry, NavigateFocus,
-    PomodoroTarget, Priority, TaskFilter, TaskItem, count_trailing_tomatoes,
-    is_heading_timestamp_line, split_timestamp_line, strip_timestamp_prefix,
+    AgendaView, DatePickerField, EditorMode, EntryIdentity, FoldOverride, FoldState, InputMode,
+    LogEntry, NavigateFocus, PomodoroTarget, Priority, TaskFilter, TaskItem, TaskSchedule,
+    count_trailing_tomatoes, is_heading_timestamp_line, split_timestamp_line, strip_timestamp_prefix,
 };
 use crate::storage;
-use chrono::{DateTime, Duration, Local, NaiveDate};
+use chrono::{DateTime, Duration, Local, NaiveDate, NaiveTime, Timelike};
 use ratatui::widgets::ListState;
 use std::collections::HashMap;
 use std::path::Path;
@@ -92,8 +92,20 @@ pub struct App<'a> {
     pub tags: Vec<(String, usize)>,
     pub tag_list_state: ListState,
     pub show_agenda_popup: bool,
+    pub agenda_all_items: Vec<crate::models::AgendaItem>,
     pub agenda_items: Vec<crate::models::AgendaItem>,
     pub agenda_state: ListState,
+    pub agenda_view: AgendaView,
+    pub agenda_selected_day: NaiveDate,
+    pub agenda_filter: TaskFilter,
+    pub show_date_picker_popup: bool,
+    pub date_picker_field: DatePickerField,
+    pub date_picker_schedule: TaskSchedule,
+    pub date_picker_default_date: NaiveDate,
+    pub date_picker_default_time: NaiveTime,
+    pub date_picker_default_duration: u32,
+    pub date_picker_input: String,
+    pub date_picker_input_mode: bool,
     pub is_search_result: bool,
     pub should_quit: bool,
     pub show_exit_popup: bool,
@@ -148,8 +160,10 @@ impl<'a> App<'a> {
     pub fn new() -> App<'a> {
         let config = Config::load();
 
-        let today = Local::now().date_naive();
+        let now = Local::now();
+        let today = now.date_naive();
         let active_date = today.format("%Y-%m-%d").to_string();
+        let rounded_time = round_time_to_quarter(now.time());
 
         let mut textarea = TextArea::default();
         textarea.set_placeholder_text(PLACEHOLDER_COMPOSE);
@@ -254,8 +268,20 @@ impl<'a> App<'a> {
             tags: Vec::new(),
             tag_list_state: ListState::default(),
             show_agenda_popup: false,
+            agenda_all_items: Vec::new(),
             agenda_items: Vec::new(),
             agenda_state: ListState::default(),
+            agenda_view: AgendaView::default(),
+            agenda_selected_day: today,
+            agenda_filter: TaskFilter::Open,
+            show_date_picker_popup: false,
+            date_picker_field: DatePickerField::Scheduled,
+            date_picker_schedule: TaskSchedule::default(),
+            date_picker_default_date: today,
+            date_picker_default_time: rounded_time,
+            date_picker_default_duration: 30,
+            date_picker_input: String::new(),
+            date_picker_input_mode: false,
             is_search_result: false,
             should_quit: false,
             show_exit_popup: false,
@@ -739,6 +765,151 @@ impl<'a> App<'a> {
         self.apply_task_filter(true);
     }
 
+    pub fn apply_agenda_filter(&mut self, reset_selection: bool) {
+        let filter = self.agenda_filter;
+        self.agenda_items = self
+            .agenda_all_items
+            .iter()
+            .filter(|item| match item.kind {
+                crate::models::AgendaItemKind::Log => true,
+                crate::models::AgendaItemKind::Task => match filter {
+                    TaskFilter::Open => !item.is_done,
+                    TaskFilter::Done => item.is_done,
+                    TaskFilter::All => true,
+                },
+            })
+            .cloned()
+            .collect();
+
+        let today = Local::now().date_naive();
+        self.agenda_items
+            .sort_by_key(|item| agenda_sort_key(item, today));
+
+        if self.agenda_items.is_empty() {
+            self.agenda_state.select(None);
+            return;
+        }
+
+        if reset_selection || self.agenda_state.selected().is_none() {
+            self.agenda_state.select(Some(0));
+        } else if let Some(i) = self.agenda_state.selected() {
+            self.agenda_state.select(Some(i.min(self.agenda_items.len() - 1)));
+        }
+    }
+
+    pub fn cycle_agenda_filter(&mut self) {
+        self.agenda_filter = match self.agenda_filter {
+            TaskFilter::Open => TaskFilter::Done,
+            TaskFilter::Done => TaskFilter::All,
+            TaskFilter::All => TaskFilter::Open,
+        };
+        self.apply_agenda_filter(true);
+    }
+
+    pub fn toggle_agenda_view(&mut self) {
+        self.agenda_view = match self.agenda_view {
+            AgendaView::List => AgendaView::Timeline,
+            AgendaView::Timeline => AgendaView::List,
+        };
+    }
+
+    pub fn set_agenda_selected_day(&mut self, day: NaiveDate) {
+        self.agenda_selected_day = day;
+        let visible = self.agenda_visible_indices();
+        if visible.is_empty() {
+            self.agenda_state.select(None);
+            return;
+        }
+        if let Some(current) = self.agenda_state.selected()
+            && visible.iter().any(|idx| *idx == current)
+        {
+            return;
+        }
+        self.agenda_state.select(Some(visible[0]));
+    }
+
+    pub fn agenda_visible_indices(&self) -> Vec<usize> {
+        match self.agenda_view {
+            AgendaView::List => self
+                .agenda_items
+                .iter()
+                .enumerate()
+                .filter(|(_, item)| item.kind == crate::models::AgendaItemKind::Task)
+                .map(|(idx, _)| idx)
+                .collect(),
+            AgendaView::Timeline => agenda_timeline_indices(self),
+        }
+    }
+
+    pub fn open_date_picker(&mut self) {
+        let (row, _) = self.textarea.cursor();
+        let line = self
+            .textarea
+            .lines()
+            .get(row)
+            .cloned()
+            .unwrap_or_default();
+        let (schedule, _) = crate::task_metadata::parse_task_metadata(&line);
+        let now = Local::now();
+
+        let default_duration = schedule.duration_minutes.unwrap_or(30);
+        self.date_picker_schedule = schedule;
+        self.date_picker_field = DatePickerField::Scheduled;
+        self.date_picker_default_date = now.date_naive();
+        self.date_picker_default_time = round_time_to_quarter(now.time());
+        self.date_picker_default_duration = default_duration;
+        self.date_picker_input.clear();
+        self.date_picker_input_mode = false;
+        self.show_date_picker_popup = true;
+    }
+
+    pub fn date_picker_effective_date(&self, field: DatePickerField) -> NaiveDate {
+        match field {
+            DatePickerField::Scheduled => self
+                .date_picker_schedule
+                .scheduled
+                .unwrap_or(self.date_picker_default_date),
+            DatePickerField::Due => self
+                .date_picker_schedule
+                .due
+                .unwrap_or(self.date_picker_default_date),
+            DatePickerField::Start => self
+                .date_picker_schedule
+                .start
+                .unwrap_or(self.date_picker_default_date),
+            DatePickerField::Time | DatePickerField::Duration => self.date_picker_default_date,
+        }
+    }
+
+    pub fn date_picker_effective_time(&self) -> NaiveTime {
+        self.date_picker_schedule
+            .time
+            .unwrap_or(self.date_picker_default_time)
+    }
+
+    pub fn date_picker_effective_duration(&self) -> u32 {
+        self.date_picker_schedule
+            .duration_minutes
+            .unwrap_or(self.date_picker_default_duration)
+    }
+
+    pub fn set_date_picker_date(&mut self, field: DatePickerField, date: NaiveDate) {
+        match field {
+            DatePickerField::Scheduled => self.date_picker_schedule.scheduled = Some(date),
+            DatePickerField::Due => self.date_picker_schedule.due = Some(date),
+            DatePickerField::Start => self.date_picker_schedule.start = Some(date),
+            DatePickerField::Time | DatePickerField::Duration => {}
+        }
+    }
+
+    pub fn set_date_picker_time(&mut self, time: NaiveTime) {
+        self.date_picker_schedule.time = Some(time);
+    }
+
+    pub fn set_date_picker_duration(&mut self, minutes: u32) {
+        self.date_picker_schedule.duration_minutes = Some(minutes);
+    }
+
     pub fn task_counts(&self) -> (usize, usize) {
         let mut open = 0usize;
         let mut done = 0usize;
@@ -997,6 +1168,14 @@ fn file_date(file_path: &str) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+fn round_time_to_quarter(time: NaiveTime) -> NaiveTime {
+    let total_minutes = time.hour() as i32 * 60 + time.minute() as i32;
+    let rounded = ((total_minutes + 14) / 15) * 15;
+    let minutes = rounded.rem_euclid(24 * 60) as u32;
+    NaiveTime::from_hms_opt(minutes / 60, minutes % 60, 0)
+        .unwrap_or_else(|| NaiveTime::from_hms_opt(0, 0, 0).unwrap())
+}
+
 fn task_priority_rank(priority: Option<Priority>) -> u8 {
     match priority {
         Some(Priority::High) => 0,
@@ -1004,6 +1183,100 @@ fn task_priority_rank(priority: Option<Priority>) -> u8 {
         Some(Priority::Low) => 2,
         None => 3,
     }
+}
+
+fn agenda_sort_key(
+    item: &crate::models::AgendaItem,
+    today: NaiveDate,
+) -> (NaiveDate, u8, u8, NaiveTime, usize) {
+    let is_overdue = item.kind == crate::models::AgendaItemKind::Task
+        && item.schedule.due.is_some()
+        && item.schedule.due.unwrap_or(today) < today
+        && !item.is_done;
+    let overdue_rank = if is_overdue { 0 } else { 1 };
+    let kind_rank = if item.kind == crate::models::AgendaItemKind::Task {
+        0
+    } else {
+        1
+    };
+    let time = item
+        .time
+        .unwrap_or_else(|| NaiveTime::from_hms_opt(23, 59, 59).unwrap());
+    (item.date, overdue_rank, kind_rank, time, item.line_number)
+}
+
+fn agenda_timeline_indices(app: &App) -> Vec<usize> {
+    let day = app.agenda_selected_day;
+    let mut overdue = Vec::new();
+    let mut all_day = Vec::new();
+    let mut timed = Vec::new();
+
+    for (idx, item) in app.agenda_items.iter().enumerate() {
+        match item.kind {
+            crate::models::AgendaItemKind::Task => {
+                let is_overdue = item.schedule.due.is_some()
+                    && item.schedule.due.unwrap_or(day) < day
+                    && !item.is_done;
+                if is_overdue {
+                    overdue.push(idx);
+                    continue;
+                }
+                if item.date != day {
+                    continue;
+                }
+                if item.time.is_some() {
+                    timed.push(idx);
+                } else {
+                    all_day.push(idx);
+                }
+            }
+            crate::models::AgendaItemKind::Log => {
+                if item.date != day {
+                    continue;
+                }
+                if item.time.is_some() {
+                    timed.push(idx);
+                } else {
+                    all_day.push(idx);
+                }
+            }
+        }
+    }
+
+    let time_min = NaiveTime::from_hms_opt(0, 0, 0).unwrap();
+    overdue.sort_by_key(|idx| {
+        let item = &app.agenda_items[*idx];
+        (
+            item.schedule.due.unwrap_or(day),
+            item.time.unwrap_or(time_min),
+            task_priority_rank(item.priority),
+            item.line_number,
+        )
+    });
+    all_day.sort_by_key(|idx| {
+        let item = &app.agenda_items[*idx];
+        (task_priority_rank(item.priority), item.line_number)
+    });
+    timed.sort_by_key(|idx| {
+        let item = &app.agenda_items[*idx];
+        let kind_rank = if item.kind == crate::models::AgendaItemKind::Task {
+            0
+        } else {
+            1
+        };
+        (
+            item.time.unwrap_or(time_min),
+            kind_rank,
+            task_priority_rank(item.priority),
+            item.line_number,
+        )
+    });
+
+    let mut visible = Vec::new();
+    visible.extend(overdue);
+    visible.extend(all_day);
+    visible.extend(timed);
+    visible
 }
 
 #[cfg(test)]

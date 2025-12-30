@@ -320,6 +320,7 @@ pub struct ComposerBindings {
     pub outdent: Vec<String>,
     pub task_toggle: Vec<String>,
     pub priority_cycle: Vec<String>,
+    pub date_picker: Vec<String>,
 }
 
 impl Default for ComposerBindings {
@@ -333,6 +334,7 @@ impl Default for ComposerBindings {
             outdent: vec!["backtab".to_string()],
             task_toggle: vec!["ctrl+t".to_string()],
             priority_cycle: vec!["ctrl+p".to_string()],
+            date_picker: vec!["ctrl+;".to_string()],
         }
     }
 }
@@ -362,6 +364,12 @@ pub struct PopupBindings {
     pub cancel: Vec<String>,
     pub up: Vec<String>,
     pub down: Vec<String>,
+    pub agenda_toggle_view: Vec<String>,
+    pub agenda_prev_day: Vec<String>,
+    pub agenda_next_day: Vec<String>,
+    pub agenda_prev_week: Vec<String>,
+    pub agenda_next_week: Vec<String>,
+    pub agenda_filter: Vec<String>,
 }
 
 impl Default for PopupBindings {
@@ -371,6 +379,12 @@ impl Default for PopupBindings {
             cancel: vec!["esc".to_string(), "n".to_string()],
             up: vec!["k".to_string(), "up".to_string()],
             down: vec!["j".to_string(), "down".to_string()],
+            agenda_toggle_view: vec!["t".to_string()],
+            agenda_prev_day: vec!["h".to_string(), "left".to_string()],
+            agenda_next_day: vec!["l".to_string(), "right".to_string()],
+            agenda_prev_week: vec!["pageup".to_string()],
+            agenda_next_week: vec!["pagedown".to_string()],
+            agenda_filter: vec!["f".to_string()],
         }
     }
 }

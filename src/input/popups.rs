@@ -2,11 +2,13 @@ use crate::{
     actions,
     app::App,
     config::{self, EditorStyle, ThemePreset, config_path, key_match},
+    date_input::{parse_duration_input, parse_relative_date_input, parse_time_input},
+    editor::markdown,
     input::editing,
-    models::{self, InputMode, Mood},
+    models::{self, DatePickerField, InputMode, Mood},
     storage,
 };
-use chrono::{Duration, Local};
+use chrono::{Duration, Local, NaiveTime, Timelike};
 use crossterm::event::{KeyCode, KeyEvent};
 
 pub fn handle_popup_events(app: &mut App, key: KeyEvent) -> bool {
@@ -22,6 +24,10 @@ pub fn handle_popup_events(app: &mut App, key: KeyEvent) -> bool {
         if key.code == KeyCode::Esc || key_match(&key, &app.config.keybindings.global.help) {
             app.show_help_popup = false;
         }
+        return true;
+    }
+    if app.show_date_picker_popup {
+        handle_date_picker_popup(app, key);
         return true;
     }
 
@@ -67,36 +73,284 @@ pub fn handle_popup_events(app: &mut App, key: KeyEvent) -> bool {
     false
 }
 
+fn handle_date_picker_popup(app: &mut App, key: KeyEvent) {
+    if app.date_picker_input_mode {
+        handle_date_picker_relative_input(app, key);
+        return;
+    }
+
+    if key_match(&key, &app.config.keybindings.popup.cancel) || key.code == KeyCode::Esc {
+        app.show_date_picker_popup = false;
+        return;
+    }
+
+    if key_match(&key, &app.config.keybindings.popup.confirm) {
+        apply_date_picker_field(app);
+        app.show_date_picker_popup = false;
+        return;
+    }
+
+    if key_match(&key, &app.config.keybindings.popup.up) {
+        app.date_picker_field = cycle_date_picker_field(app.date_picker_field, -1);
+        return;
+    }
+
+    if key_match(&key, &app.config.keybindings.popup.down) {
+        app.date_picker_field = cycle_date_picker_field(app.date_picker_field, 1);
+        return;
+    }
+
+    match key.code {
+        KeyCode::Left => {
+            adjust_date_picker_value(app, -1, 0);
+        }
+        KeyCode::Right => {
+            adjust_date_picker_value(app, 1, 0);
+        }
+        KeyCode::Char('+') | KeyCode::Char('=') => {
+            adjust_date_picker_value(app, 1, 0);
+        }
+        KeyCode::Char('-') => {
+            adjust_date_picker_value(app, -1, 0);
+        }
+        KeyCode::Char('[') => {
+            adjust_date_picker_value(app, -7, -60);
+        }
+        KeyCode::Char(']') => {
+            adjust_date_picker_value(app, 7, 60);
+        }
+        KeyCode::Char('t') | KeyCode::Char('T') => {
+            if is_date_picker_date_field(app.date_picker_field) {
+                let today = Local::now().date_naive();
+                app.set_date_picker_date(app.date_picker_field, today);
+            }
+        }
+        KeyCode::Char('r') | KeyCode::Char('R') => {
+            app.date_picker_input.clear();
+            app.date_picker_input_mode = true;
+        }
+        KeyCode::Backspace | KeyCode::Delete => {
+            remove_date_picker_field(app);
+            app.show_date_picker_popup = false;
+        }
+        KeyCode::Tab => {
+            app.date_picker_field = cycle_date_picker_field(app.date_picker_field, 1);
+        }
+        KeyCode::BackTab => {
+            app.date_picker_field = cycle_date_picker_field(app.date_picker_field, -1);
+        }
+        _ => {}
+    }
+}
+
+fn handle_date_picker_relative_input(app: &mut App, key: KeyEvent) {
+    if key.code == KeyCode::Esc {
+        app.date_picker_input_mode = false;
+        app.date_picker_input.clear();
+        return;
+    }
+
+    if key.code == KeyCode::Enter {
+        let input = app.date_picker_input.trim().to_string();
+        if input.is_empty() {
+            app.date_picker_input_mode = false;
+            return;
+        }
+
+        let field = app.date_picker_field;
+        let parsed = match field {
+            DatePickerField::Scheduled | DatePickerField::Due | DatePickerField::Start => {
+                let base = app.date_picker_effective_date(field);
+                parse_relative_date_input(&input, base).map(DatePickerValue::Date)
+            }
+            DatePickerField::Time => parse_time_input(&input).map(DatePickerValue::Time),
+            DatePickerField::Duration => parse_duration_input(&input).map(DatePickerValue::Duration),
+        };
+
+        if let Some(value) = parsed {
+            match value {
+                DatePickerValue::Date(date) => app.set_date_picker_date(field, date),
+                DatePickerValue::Time(time) => app.set_date_picker_time(time),
+                DatePickerValue::Duration(minutes) => app.set_date_picker_duration(minutes),
+            }
+            app.date_picker_input.clear();
+            app.date_picker_input_mode = false;
+        } else {
+            app.toast("Invalid relative input.");
+        }
+        return;
+    }
+
+    match key.code {
+        KeyCode::Backspace => {
+            app.date_picker_input.pop();
+        }
+        KeyCode::Char(c) => {
+            if !key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) {
+                app.date_picker_input.push(c);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn apply_date_picker_field(app: &mut App) {
+    let field = app.date_picker_field;
+    let key = match field {
+        DatePickerField::Scheduled => crate::task_metadata::TaskMetadataKey::Scheduled,
+        DatePickerField::Due => crate::task_metadata::TaskMetadataKey::Due,
+        DatePickerField::Start => crate::task_metadata::TaskMetadataKey::Start,
+        DatePickerField::Time => crate::task_metadata::TaskMetadataKey::Time,
+        DatePickerField::Duration => crate::task_metadata::TaskMetadataKey::Duration,
+    };
+
+    let value = match field {
+        DatePickerField::Scheduled => app.date_picker_effective_date(field).format("%Y-%m-%d").to_string(),
+        DatePickerField::Due => app.date_picker_effective_date(field).format("%Y-%m-%d").to_string(),
+        DatePickerField::Start => app.date_picker_effective_date(field).format("%Y-%m-%d").to_string(),
+        DatePickerField::Time => format_time_value(app.date_picker_effective_time()),
+        DatePickerField::Duration => format_duration_value(app.date_picker_effective_duration()),
+    };
+
+    let updated = markdown::upsert_task_metadata(&mut app.textarea, key, &value);
+    if updated {
+        app.mark_insert_modified();
+        app.composer_dirty = true;
+    }
+}
+
+fn remove_date_picker_field(app: &mut App) {
+    let key = match app.date_picker_field {
+        DatePickerField::Scheduled => crate::task_metadata::TaskMetadataKey::Scheduled,
+        DatePickerField::Due => crate::task_metadata::TaskMetadataKey::Due,
+        DatePickerField::Start => crate::task_metadata::TaskMetadataKey::Start,
+        DatePickerField::Time => crate::task_metadata::TaskMetadataKey::Time,
+        DatePickerField::Duration => crate::task_metadata::TaskMetadataKey::Duration,
+    };
+
+    let updated = markdown::remove_task_metadata(&mut app.textarea, key);
+    if updated {
+        app.mark_insert_modified();
+        app.composer_dirty = true;
+    }
+}
+
+fn adjust_date_picker_value(app: &mut App, delta_days: i64, delta_minutes: i32) {
+    match app.date_picker_field {
+        DatePickerField::Scheduled | DatePickerField::Due | DatePickerField::Start => {
+            let base = app.date_picker_effective_date(app.date_picker_field);
+            let next = base + Duration::days(delta_days);
+            app.set_date_picker_date(app.date_picker_field, next);
+        }
+        DatePickerField::Time => {
+            let time = app.date_picker_effective_time();
+            let next = add_minutes_wrapping(time, if delta_minutes == 0 { delta_days * 15 } else { delta_minutes as i64 });
+            app.set_date_picker_time(next);
+        }
+        DatePickerField::Duration => {
+            let current = app.date_picker_effective_duration() as i64;
+            let delta = if delta_minutes == 0 { delta_days * 15 } else { delta_minutes as i64 };
+            let next = (current + delta).clamp(15, 24 * 60);
+            app.set_date_picker_duration(next as u32);
+        }
+    }
+}
+
+fn add_minutes_wrapping(time: NaiveTime, delta_minutes: i64) -> NaiveTime {
+    let total = time.hour() as i64 * 60 + time.minute() as i64 + delta_minutes;
+    let minutes = total.rem_euclid(24 * 60) as u32;
+    NaiveTime::from_hms_opt(minutes / 60, minutes % 60, 0)
+        .unwrap_or_else(|| NaiveTime::from_hms_opt(0, 0, 0).unwrap())
+}
+
+fn is_date_picker_date_field(field: DatePickerField) -> bool {
+    matches!(
+        field,
+        DatePickerField::Scheduled | DatePickerField::Due | DatePickerField::Start
+    )
+}
+
+fn cycle_date_picker_field(field: DatePickerField, delta: i32) -> DatePickerField {
+    let fields = [
+        DatePickerField::Scheduled,
+        DatePickerField::Due,
+        DatePickerField::Start,
+        DatePickerField::Time,
+        DatePickerField::Duration,
+    ];
+    let index = fields
+        .iter()
+        .position(|f| *f == field)
+        .unwrap_or(0) as i32;
+    let len = fields.len() as i32;
+    let next = (index + delta).rem_euclid(len) as usize;
+    fields[next]
+}
+
+fn format_time_value(time: NaiveTime) -> String {
+    format!("{:02}:{:02}", time.hour(), time.minute())
+}
+
+fn format_duration_value(minutes: u32) -> String {
+    if minutes >= 60 {
+        let hours = minutes / 60;
+        let mins = minutes % 60;
+        if mins == 0 {
+            format!("{hours}h")
+        } else {
+            format!("{hours}h{mins}m")
+        }
+    } else {
+        format!("{minutes}m")
+    }
+}
+
+enum DatePickerValue {
+    Date(chrono::NaiveDate),
+    Time(NaiveTime),
+    Duration(u32),
+}
+
 fn handle_agenda_popup(app: &mut App, key: KeyEvent) {
     if key_match(&key, &app.config.keybindings.popup.up) {
-        let i = match app.agenda_state.selected() {
-            Some(i) => {
-                if i == 0 {
-                    app.agenda_items.len().saturating_sub(1)
-                } else {
-                    i - 1
-                }
-            }
-            None => 0,
-        };
-        app.agenda_state.select(Some(i));
+        agenda_move_selection(app, -1);
     } else if key_match(&key, &app.config.keybindings.popup.down) {
-        let i = match app.agenda_state.selected() {
-            Some(i) => {
-                if i + 1 >= app.agenda_items.len() {
-                    0
-                } else {
-                    i + 1
-                }
-            }
-            None => 0,
-        };
-        app.agenda_state.select(Some(i));
+        agenda_move_selection(app, 1);
     } else if key_match(&key, &app.config.keybindings.popup.confirm) {
         actions::jump_to_agenda_item(app);
+    } else if key_match(&key, &app.config.keybindings.popup.agenda_toggle_view) {
+        app.toggle_agenda_view();
+        app.set_agenda_selected_day(app.agenda_selected_day);
+    } else if key_match(&key, &app.config.keybindings.popup.agenda_prev_day) {
+        app.set_agenda_selected_day(app.agenda_selected_day - Duration::days(1));
+    } else if key_match(&key, &app.config.keybindings.popup.agenda_next_day) {
+        app.set_agenda_selected_day(app.agenda_selected_day + Duration::days(1));
+    } else if key_match(&key, &app.config.keybindings.popup.agenda_prev_week) {
+        app.set_agenda_selected_day(app.agenda_selected_day - Duration::days(7));
+    } else if key_match(&key, &app.config.keybindings.popup.agenda_next_week) {
+        app.set_agenda_selected_day(app.agenda_selected_day + Duration::days(7));
+    } else if key_match(&key, &app.config.keybindings.popup.agenda_filter) {
+        app.cycle_agenda_filter();
+        app.set_agenda_selected_day(app.agenda_selected_day);
     } else if key_match(&key, &app.config.keybindings.popup.cancel) || key.code == KeyCode::Esc {
         app.show_agenda_popup = false;
     }
+}
+
+fn agenda_move_selection(app: &mut App, delta: i32) {
+    let visible = app.agenda_visible_indices();
+    if visible.is_empty() {
+        app.agenda_state.select(None);
+        return;
+    }
+
+    let current = app.agenda_state.selected();
+    let pos = current
+        .and_then(|idx| visible.iter().position(|i| *i == idx))
+        .unwrap_or(0);
+    let len = visible.len() as i32;
+    let next = (pos as i32 + delta).rem_euclid(len) as usize;
+    app.agenda_state.select(Some(visible[next]));
 }
 
 fn handle_exit_popup(app: &mut App, key: KeyEvent) {

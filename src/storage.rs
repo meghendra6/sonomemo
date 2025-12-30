@@ -1,7 +1,8 @@
 use crate::models::{
-    AgendaItem, Priority, LogEntry, TaskItem, count_trailing_tomatoes, is_timestamped_line,
-    strip_timestamp_prefix, strip_trailing_tomatoes,
+    AgendaItem, AgendaItemKind, Priority, LogEntry, TaskItem, count_trailing_tomatoes,
+    is_timestamped_line, split_timestamp_line, strip_timestamp_prefix, strip_trailing_tomatoes,
 };
+use crate::task_metadata::{parse_task_metadata, strip_task_metadata_tokens};
 use chrono::{Duration, Local, NaiveDate};
 use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
@@ -166,11 +167,20 @@ pub fn read_tasks_for_date_range(
             if let Ok(content) = fs::read_to_string(&path) {
                 let tasks = parse_task_content(&content, &path_str);
                 for task in tasks {
+                    let agenda_date = agenda_date_for_task(&task, current);
+                    if agenda_date < start_date || agenda_date > end_date {
+                        continue;
+                    }
                     items.push(AgendaItem {
-                        date: current,
+                        kind: AgendaItemKind::Task,
+                        date: agenda_date,
+                        time: task.schedule.time,
+                        duration_minutes: task.schedule.duration_minutes,
                         text: task.text,
                         indent: task.indent,
                         is_done: task.is_done,
+                        priority: task.priority,
+                        schedule: task.schedule.clone(),
                         file_path: task.file_path,
                         line_number: task.line_number,
                     });
@@ -181,6 +191,61 @@ pub fn read_tasks_for_date_range(
     }
 
     Ok(items)
+}
+
+pub fn read_agenda_entries(
+    log_path: &Path,
+    start_date: NaiveDate,
+    end_date: NaiveDate,
+) -> io::Result<Vec<AgendaItem>> {
+    let mut items = read_tasks_for_date_range(log_path, start_date, end_date)?;
+    let logs = read_entries_for_date_range(log_path, start_date, end_date)?;
+
+    for entry in logs {
+        let Some(date) = extract_date_from_path(&entry.file_path) else {
+            continue;
+        };
+        let time = parse_entry_time(&entry);
+        let text = entry
+            .content
+            .lines()
+            .next()
+            .map(strip_timestamp_prefix)
+            .unwrap_or("")
+            .trim()
+            .to_string();
+
+        items.push(AgendaItem {
+            kind: AgendaItemKind::Log,
+            date,
+            time,
+            duration_minutes: None,
+            text,
+            indent: 0,
+            is_done: false,
+            priority: None,
+            schedule: crate::models::TaskSchedule::default(),
+            file_path: entry.file_path,
+            line_number: entry.line_number,
+        });
+    }
+
+    Ok(items)
+}
+
+fn agenda_date_for_task(task: &TaskItem, file_date: NaiveDate) -> NaiveDate {
+    task.schedule
+        .scheduled
+        .or(task.schedule.due)
+        .or(task.schedule.start)
+        .unwrap_or(file_date)
+}
+
+fn parse_entry_time(entry: &LogEntry) -> Option<chrono::NaiveTime> {
+    let first = entry.content.lines().next()?;
+    let (prefix, _) = split_timestamp_line(first)?;
+    let time_str = prefix.trim().trim_start_matches('[').trim_end_matches(']');
+    chrono::NaiveTime::parse_from_str(time_str, "%H:%M:%S").ok()
 }
 
 pub fn search_entries(log_path: &Path, query: &str) -> io::Result<Vec<LogEntry>> {
@@ -329,7 +394,8 @@ fn strip_priority_marker(text: &str) -> String {
 
 fn task_identity_from_text(text: &str) -> (String, Option<String>) {
     let without_priority = strip_priority_marker(text);
-    let (base, carryover_from) = strip_carryover_marker(&without_priority);
+    let without_metadata = strip_task_metadata_tokens(&without_priority);
+    let (base, carryover_from) = strip_carryover_marker(&without_metadata);
     (normalize_task_text(&base), carryover_from)
 }
 
@@ -359,15 +425,17 @@ fn parse_task_content(content: &str, path_str: &str) -> Vec<TaskItem> {
         let (text, tomato_count) = strip_trailing_tomatoes(text);
         let text = text.trim();
         let priority = parse_priority_marker(text);
+        let (schedule, display_text) = parse_task_metadata(text);
         let (task_identity, carryover_from) = task_identity_from_text(text);
         tasks.push(TaskItem {
-            text: text.to_string(),
+            text: display_text,
             indent: indent_spaces.div_ceil(2),
             tomato_count,
             file_path: path_str.to_string(),
             line_number: i,
             is_done,
             priority,
+            schedule,
             task_identity,
             carryover_from,
         });
@@ -401,7 +469,7 @@ struct ParsedTaskLine {
     carryover_from: Option<String>,
     is_done: bool,
     indent_level: usize,
-    base_text: String,
+    raw_text: String,
 }
 
 fn parse_task_line(line: &str) -> Option<ParsedTaskLine> {
@@ -425,8 +493,9 @@ fn parse_task_line(line: &str) -> Option<ParsedTaskLine> {
 
     let (text, _) = strip_trailing_tomatoes(text);
     let text = text.trim();
-    let base_text = strip_priority_marker(text);
-    let (base_text, carryover_from) = strip_carryover_marker(&base_text);
+    let (raw_text, carryover_from) = strip_carryover_marker(text);
+    let base_text = strip_priority_marker(&raw_text);
+    let base_text = strip_task_metadata_tokens(&base_text);
     let identity = normalize_task_text(&base_text);
 
     Some(ParsedTaskLine {
@@ -434,7 +503,7 @@ fn parse_task_line(line: &str) -> Option<ParsedTaskLine> {
         carryover_from,
         is_done,
         indent_level: indent_spaces.div_ceil(2),
-        base_text,
+        raw_text: raw_text.to_string(),
     })
 }
 
@@ -783,12 +852,12 @@ pub fn collect_carryover_tasks(log_path: &Path, today: &str) -> io::Result<Vec<S
             if parsed.is_done {
                 continue;
             }
-            let base_text = parsed.base_text.trim();
-            if base_text.is_empty() {
+            let raw_text = parsed.raw_text.trim();
+            if raw_text.is_empty() {
                 continue;
             }
             let indent = "  ".repeat(parsed.indent_level);
-            carryover.push(format!("{indent}- [ ] {base_text} ⟦{date_str}⟧"));
+            carryover.push(format!("{indent}- [ ] {raw_text} ⟦{date_str}⟧"));
         }
     }
 

@@ -1,10 +1,12 @@
 use super::components::{centered_rect, parse_markdown_spans, wrap_markdown_line};
 use crate::app::App;
 use crate::config::{EditorStyle, ThemePreset};
-use crate::models::{EditorMode, InputMode, Mood, VisualKind};
+use crate::models::{
+    AgendaItemKind, AgendaView, DatePickerField, EditorMode, InputMode, Mood, VisualKind,
+};
 use crate::ui::color_parser::parse_color;
 use crate::ui::theme::ThemeTokens;
-use chrono::Local;
+use chrono::{Datelike, Duration, Local, NaiveDate, NaiveTime, Timelike};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout},
@@ -136,9 +138,60 @@ pub fn render_activity_popup(f: &mut Frame, app: &App) {
 }
 
 pub fn render_agenda_popup(f: &mut Frame, app: &App) {
+    match app.agenda_view {
+        AgendaView::List => render_agenda_list_popup(f, app),
+        AgendaView::Timeline => render_agenda_timeline_popup(f, app),
+    }
+}
+
+pub fn render_date_picker_popup(f: &mut Frame, app: &App) {
     let tokens = ThemeTokens::from_theme(&app.config.theme);
     let block = Block::default()
-        .title(" 📅 Agenda (Last 7 Days) ")
+        .title(" 📅 Date/Time Picker ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(tokens.ui_border_default));
+    let area = centered_rect(80, 60, f.area());
+    let inner = block.inner(area);
+    f.render_widget(Clear, area);
+    f.render_widget(block, area);
+
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(1), Constraint::Length(1)])
+        .margin(1)
+        .split(inner);
+
+    let body = sections[0];
+    let footer = sections[1];
+    let input_line = sections[2];
+
+    let body_cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Length(24), Constraint::Min(1)])
+        .split(body);
+
+    render_date_picker_fields(f, app, body_cols[0], &tokens);
+    render_date_picker_detail(f, app, body_cols[1], &tokens);
+
+    let footer_text = "Enter apply | Esc cancel | +/- day | [/] week | T today | R relative";
+    let footer_style = Style::default().fg(tokens.ui_muted);
+    f.render_widget(Paragraph::new(footer_text).style(footer_style), footer);
+
+    let input_text = if app.date_picker_input_mode {
+        format!("Relative: {}", app.date_picker_input)
+    } else {
+        "Relative: (press R)".to_string()
+    };
+    f.render_widget(
+        Paragraph::new(input_text).style(Style::default().fg(tokens.ui_accent)),
+        input_line,
+    );
+}
+
+fn render_agenda_list_popup(f: &mut Frame, app: &App) {
+    let tokens = ThemeTokens::from_theme(&app.config.theme);
+    let block = Block::default()
+        .title(" 📅 Agenda (List) ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(tokens.ui_border_default));
     let area = centered_rect(80, 70, f.area());
@@ -154,7 +207,11 @@ pub fn render_agenda_popup(f: &mut Frame, app: &App) {
     let mut ui_index = 0usize;
     let selected = app.agenda_state.selected();
 
+    let today = Local::now().date_naive();
     for (idx, item) in app.agenda_items.iter().enumerate() {
+        if item.kind != AgendaItemKind::Task {
+            continue;
+        }
         if last_date != Some(item.date) {
             items.push(ListItem::new(Line::from(Span::styled(
                 item.date.format("%Y-%m-%d").to_string(),
@@ -177,6 +234,11 @@ pub fn render_agenda_popup(f: &mut Frame, app: &App) {
             line.push_str("[x] ");
         } else {
             line.push_str("[ ] ");
+        }
+        let badges = agenda_badges(item, today);
+        if !badges.is_empty() {
+            line.push_str(&badges);
+            line.push(' ');
         }
         line.push_str(&item.text);
 
@@ -207,6 +269,438 @@ pub fn render_agenda_popup(f: &mut Frame, app: &App) {
     let mut list_state = ratatui::widgets::ListState::default();
     list_state.select(ui_selected_index);
     f.render_stateful_widget(list, inner, &mut list_state);
+}
+
+fn render_date_picker_fields(f: &mut Frame, app: &App, area: ratatui::layout::Rect, tokens: &ThemeTokens) {
+    let fields = [
+        DatePickerField::Scheduled,
+        DatePickerField::Due,
+        DatePickerField::Start,
+        DatePickerField::Time,
+        DatePickerField::Duration,
+    ];
+    let selected = fields
+        .iter()
+        .position(|f| *f == app.date_picker_field)
+        .unwrap_or(0);
+
+    let mut items: Vec<ListItem> = Vec::new();
+    for field in fields {
+        let label = date_picker_field_label(field);
+        let value = date_picker_field_value(app, field);
+        let line = Line::from(vec![
+            Span::styled(format!("{:<10}", label), Style::default().fg(tokens.ui_accent)),
+            Span::styled(value, Style::default().fg(tokens.ui_fg)),
+        ]);
+        items.push(ListItem::new(line));
+    }
+
+    let highlight = Style::default()
+        .bg(tokens.ui_selection_bg)
+        .add_modifier(Modifier::BOLD);
+    let list = List::new(items).highlight_style(highlight).highlight_symbol(" ");
+    let mut state = ratatui::widgets::ListState::default();
+    state.select(Some(selected));
+    f.render_stateful_widget(list, area, &mut state);
+}
+
+fn render_date_picker_detail(
+    f: &mut Frame,
+    app: &App,
+    area: ratatui::layout::Rect,
+    tokens: &ThemeTokens,
+) {
+    match app.date_picker_field {
+        DatePickerField::Scheduled | DatePickerField::Due | DatePickerField::Start => {
+            render_date_picker_calendar(f, app, area, tokens);
+        }
+        DatePickerField::Time => render_date_picker_time(f, app, area, tokens),
+        DatePickerField::Duration => render_date_picker_duration(f, app, area, tokens),
+    }
+}
+
+fn render_date_picker_calendar(
+    f: &mut Frame,
+    app: &App,
+    area: ratatui::layout::Rect,
+    tokens: &ThemeTokens,
+) {
+    let selected = app.date_picker_effective_date(app.date_picker_field);
+    let today = Local::now().date_naive();
+    let header = selected.format("%B %Y").to_string();
+
+    let mut lines: Vec<Line> = Vec::new();
+    lines.push(Line::from(Span::styled(
+        header,
+        Style::default()
+            .fg(tokens.ui_accent)
+            .add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from("Mo Tu We Th Fr Sa Su"));
+
+    let month_start = NaiveDate::from_ymd_opt(selected.year(), selected.month(), 1)
+        .unwrap_or(selected);
+    let first_weekday = month_start.weekday().num_days_from_monday() as usize;
+    let days_in_month = last_day_of_month(selected.year(), selected.month());
+
+    let mut day = 1u32;
+    for row in 0..6 {
+        let mut spans: Vec<Span> = Vec::new();
+        for col in 0..7 {
+            let index = row * 7 + col;
+            if index < first_weekday || day > days_in_month {
+                spans.push(Span::raw("   "));
+                continue;
+            }
+
+            let date = NaiveDate::from_ymd_opt(selected.year(), selected.month(), day)
+                .unwrap_or(selected);
+            let mut style = Style::default().fg(tokens.ui_fg);
+            if date == today {
+                style = style.fg(tokens.ui_accent);
+            }
+            if date == selected {
+                style = style
+                    .fg(tokens.ui_bg)
+                    .bg(tokens.ui_accent)
+                    .add_modifier(Modifier::BOLD);
+            }
+
+            spans.push(Span::styled(format!("{:>2} ", day), style));
+            day += 1;
+        }
+        lines.push(Line::from(spans));
+        if day > days_in_month {
+            break;
+        }
+    }
+
+    f.render_widget(Paragraph::new(lines), area);
+}
+
+fn render_date_picker_time(
+    f: &mut Frame,
+    app: &App,
+    area: ratatui::layout::Rect,
+    tokens: &ThemeTokens,
+) {
+    let selected = app.date_picker_effective_time();
+    let header = format!("Time: {}", format_time(selected));
+
+    let mut spans: Vec<Span> = Vec::new();
+    for offset in -3..=3 {
+        let time = add_minutes_wrapping(selected, offset * 15);
+        let mut style = Style::default().fg(tokens.ui_fg);
+        if offset == 0 {
+            style = style
+                .bg(tokens.ui_selection_bg)
+                .add_modifier(Modifier::BOLD);
+        }
+        spans.push(Span::styled(format!("{:>5}", format_time(time)), style));
+        spans.push(Span::raw(" "));
+    }
+
+    let lines = vec![
+        Line::from(Span::styled(
+            header,
+            Style::default()
+                .fg(tokens.ui_accent)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(spans),
+        Line::from(""),
+        Line::from("Use left/right or +/- to adjust by 15m, [/] for 60m."),
+    ];
+    f.render_widget(Paragraph::new(lines), area);
+}
+
+fn render_date_picker_duration(
+    f: &mut Frame,
+    app: &App,
+    area: ratatui::layout::Rect,
+    tokens: &ThemeTokens,
+) {
+    let selected = app.date_picker_effective_duration();
+    let header = format!("Duration: {}", format_duration(selected));
+
+    let presets = [15u32, 30, 45, 60, 90, 120];
+    let mut spans: Vec<Span> = Vec::new();
+    for preset in presets {
+        let mut style = Style::default().fg(tokens.ui_fg);
+        if preset == selected {
+            style = style
+                .bg(tokens.ui_selection_bg)
+                .add_modifier(Modifier::BOLD);
+        }
+        spans.push(Span::styled(format!("{:>4}", format_duration(preset)), style));
+        spans.push(Span::raw(" "));
+    }
+
+    let lines = vec![
+        Line::from(Span::styled(
+            header,
+            Style::default()
+                .fg(tokens.ui_accent)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(spans),
+        Line::from(""),
+        Line::from("Use left/right or +/- to adjust by 15m, [/] for 60m."),
+    ];
+    f.render_widget(Paragraph::new(lines), area);
+}
+
+fn date_picker_field_label(field: DatePickerField) -> &'static str {
+    match field {
+        DatePickerField::Scheduled => "Scheduled",
+        DatePickerField::Due => "Due",
+        DatePickerField::Start => "Start",
+        DatePickerField::Time => "Time",
+        DatePickerField::Duration => "Duration",
+    }
+}
+
+fn date_picker_field_value(app: &App, field: DatePickerField) -> String {
+    match field {
+        DatePickerField::Scheduled => app
+            .date_picker_schedule
+            .scheduled
+            .map(|d| d.format("%Y-%m-%d").to_string())
+            .unwrap_or_else(|| "--".to_string()),
+        DatePickerField::Due => app
+            .date_picker_schedule
+            .due
+            .map(|d| d.format("%Y-%m-%d").to_string())
+            .unwrap_or_else(|| "--".to_string()),
+        DatePickerField::Start => app
+            .date_picker_schedule
+            .start
+            .map(|d| d.format("%Y-%m-%d").to_string())
+            .unwrap_or_else(|| "--".to_string()),
+        DatePickerField::Time => app
+            .date_picker_schedule
+            .time
+            .map(format_time)
+            .unwrap_or_else(|| "--".to_string()),
+        DatePickerField::Duration => app
+            .date_picker_schedule
+            .duration_minutes
+            .map(format_duration)
+            .unwrap_or_else(|| "--".to_string()),
+    }
+}
+
+fn last_day_of_month(year: i32, month: u32) -> u32 {
+    let (next_year, next_month) = if month == 12 {
+        (year + 1, 1)
+    } else {
+        (year, month + 1)
+    };
+    let first_next = NaiveDate::from_ymd_opt(next_year, next_month, 1)
+        .unwrap_or_else(|| NaiveDate::from_ymd_opt(year, month, 1).unwrap());
+    let last = first_next - Duration::days(1);
+    last.day()
+}
+
+fn add_minutes_wrapping(time: NaiveTime, delta: i32) -> NaiveTime {
+    let total = time.hour() as i32 * 60 + time.minute() as i32 + delta;
+    let minutes = total.rem_euclid(24 * 60) as u32;
+    NaiveTime::from_hms_opt(minutes / 60, minutes % 60, 0)
+        .unwrap_or_else(|| NaiveTime::from_hms_opt(0, 0, 0).unwrap())
+}
+
+fn format_time(time: NaiveTime) -> String {
+    format!("{:02}:{:02}", time.hour(), time.minute())
+}
+
+fn format_duration(minutes: u32) -> String {
+    if minutes >= 60 {
+        let hours = minutes / 60;
+        let mins = minutes % 60;
+        if mins == 0 {
+            format!("{hours}h")
+        } else {
+            format!("{hours}h{mins}m")
+        }
+    } else {
+        format!("{minutes}m")
+    }
+}
+
+fn render_agenda_timeline_popup(f: &mut Frame, app: &App) {
+    let tokens = ThemeTokens::from_theme(&app.config.theme);
+    let date_label = app.agenda_selected_day.format("%Y-%m-%d").to_string();
+    let title = format!(" 📅 Agenda (Timeline) {date_label} ");
+    let block = Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(tokens.ui_border_default));
+    let area = centered_rect(80, 70, f.area());
+    let inner = block.inner(area);
+    f.render_widget(Clear, area);
+    f.render_widget(block, area);
+
+    let list_width = inner.width.saturating_sub(2).max(1) as usize;
+    let time_width = 5usize;
+    let content_width = list_width.saturating_sub(time_width + 1).max(1);
+    let header_style = Style::default()
+        .fg(tokens.ui_accent)
+        .add_modifier(Modifier::BOLD);
+
+    let visible = app.agenda_visible_indices();
+    let selected = app.agenda_state.selected();
+    let mut items: Vec<ListItem> = Vec::new();
+    let mut ui_selected_index: Option<usize> = None;
+    let mut ui_index = 0usize;
+    let mut last_section: Option<AgendaTimelineSection> = None;
+
+    if visible.is_empty() {
+        items.push(ListItem::new(Line::from(Span::styled(
+            "No agenda items for this day.",
+            Style::default().fg(tokens.ui_muted),
+        ))));
+    } else {
+        for idx in visible {
+            let item = &app.agenda_items[idx];
+            let section = agenda_timeline_section(item, app.agenda_selected_day);
+            if last_section != Some(section) {
+                let label = match section {
+                    AgendaTimelineSection::Overdue => "OVERDUE",
+                    AgendaTimelineSection::AllDay => "ALL-DAY",
+                    AgendaTimelineSection::Timed => "TIME",
+                };
+                items.push(ListItem::new(Line::from(Span::styled(
+                    label,
+                    header_style,
+                ))));
+                ui_index += 1;
+                last_section = Some(section);
+            }
+
+            if selected == Some(idx) {
+                ui_selected_index = Some(ui_index);
+            }
+
+            let time_label = item
+                .time
+                .map(|t| t.format("%H:%M").to_string())
+                .unwrap_or_else(String::new);
+            let label = if time_label.is_empty() {
+                " ".repeat(time_width)
+            } else {
+                time_label
+            };
+
+            let content = agenda_timeline_line(item, app.agenda_selected_day);
+            let wrapped = wrap_markdown_line(&content, content_width);
+            for (line_idx, line) in wrapped.iter().enumerate() {
+                let prefix = if line_idx == 0 {
+                    label.clone()
+                } else {
+                    " ".repeat(time_width)
+                };
+                let display = format!("{prefix} {line}");
+                let line_spans = parse_markdown_spans(
+                    &display,
+                    &app.config.theme,
+                    false,
+                    None,
+                    Style::default(),
+                );
+                items.push(ListItem::new(Line::from(line_spans)));
+                ui_index += 1;
+            }
+        }
+    }
+
+    let highlight_style = Style::default()
+        .bg(tokens.ui_selection_bg)
+        .add_modifier(Modifier::BOLD);
+    let list = List::new(items)
+        .highlight_symbol("")
+        .highlight_style(highlight_style);
+
+    let mut list_state = ratatui::widgets::ListState::default();
+    list_state.select(ui_selected_index);
+    f.render_stateful_widget(list, inner, &mut list_state);
+}
+
+fn agenda_badges(item: &crate::models::AgendaItem, today: chrono::NaiveDate) -> String {
+    if item.kind != AgendaItemKind::Task {
+        return String::new();
+    }
+    let mut badges = String::new();
+    if item.schedule.scheduled.is_some() {
+        badges.push_str("[S]");
+    }
+    if item.schedule.due.is_some() {
+        badges.push_str("[D]");
+    }
+    if item.schedule.time.is_some() {
+        badges.push_str("[T]");
+    }
+    let is_overdue = item.schedule.due.is_some()
+        && item.schedule.due.unwrap_or(today) < today
+        && !item.is_done;
+    if is_overdue {
+        badges.push_str("[O]");
+    }
+    badges
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AgendaTimelineSection {
+    Overdue,
+    AllDay,
+    Timed,
+}
+
+fn agenda_timeline_section(
+    item: &crate::models::AgendaItem,
+    day: chrono::NaiveDate,
+) -> AgendaTimelineSection {
+    if item.kind == AgendaItemKind::Task
+        && item.schedule.due.is_some()
+        && item.schedule.due.unwrap_or(day) < day
+        && !item.is_done
+    {
+        return AgendaTimelineSection::Overdue;
+    }
+    if item.time.is_some() {
+        AgendaTimelineSection::Timed
+    } else {
+        AgendaTimelineSection::AllDay
+    }
+}
+
+fn agenda_timeline_line(
+    item: &crate::models::AgendaItem,
+    day: chrono::NaiveDate,
+) -> String {
+    match item.kind {
+        AgendaItemKind::Log => format!("* {}", item.text),
+        AgendaItemKind::Task => {
+            let mut line = String::new();
+            line.push_str(&"  ".repeat(item.indent));
+            if item.is_done {
+                line.push_str("- [x] ");
+            } else {
+                line.push_str("- [ ] ");
+            }
+            let badges = agenda_badges(item, day);
+            if !badges.is_empty() {
+                line.push_str(&badges);
+                line.push(' ');
+            }
+            line.push_str(&item.text);
+            if let Some(minutes) = item.duration_minutes {
+                line.push_str(&format!(" ({})", format_duration(minutes)));
+            }
+            line
+        }
+    }
 }
 
 pub fn render_mood_popup(f: &mut Frame, app: &mut App) {
@@ -422,6 +916,7 @@ pub fn render_help_popup(f: &mut Frame, app: &App) {
                     ("New line", fmt_keys(&kb.composer.newline)),
                     ("Toggle task", fmt_keys(&kb.composer.task_toggle)),
                     ("Priority cycle", fmt_keys(&kb.composer.priority_cycle)),
+                    ("Date picker", fmt_keys(&kb.composer.date_picker)),
                     ("Indent", fmt_keys(&kb.composer.indent)),
                     ("Outdent", fmt_keys(&kb.composer.outdent)),
                     ("Clear", fmt_keys(&kb.composer.clear)),

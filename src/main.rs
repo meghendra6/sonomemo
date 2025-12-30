@@ -17,11 +17,13 @@ use std::{error::Error, io};
 mod actions;
 mod app;
 mod config;
+mod date_input;
 mod editor;
 mod input;
 mod models;
 mod runtime;
 mod storage;
+mod task_metadata;
 mod ui;
 
 use app::App;

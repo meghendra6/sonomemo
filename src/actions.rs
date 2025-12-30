@@ -108,19 +108,20 @@ pub fn open_agenda_popup(app: &mut App) {
     let today = Local::now().date_naive();
     let start = today - Duration::days(AGENDA_DAYS_BACK);
     let end = today;
-    let items = storage::read_tasks_for_date_range(&app.config.data.log_path, start, end)
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|item| !item.is_done)
-        .collect::<Vec<_>>();
+    let items = storage::read_agenda_entries(&app.config.data.log_path, start, end)
+        .unwrap_or_default();
 
     if items.is_empty() {
         app.toast("No agenda items.");
         return;
     }
 
-    app.agenda_items = items;
-    app.agenda_state.select(Some(0));
+    app.agenda_all_items = items;
+    app.agenda_selected_day = today;
+    app.agenda_view = models::AgendaView::List;
+    app.agenda_filter = models::TaskFilter::Open;
+    app.apply_agenda_filter(true);
+    app.set_agenda_selected_day(today);
     app.show_agenda_popup = true;
 }
 

@@ -1,10 +1,31 @@
-use chrono::NaiveDate;
+use chrono::{NaiveDate, NaiveTime};
 
 #[derive(PartialEq)]
 pub enum InputMode {
     Navigate,
     Editing,
     Search,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum AgendaView {
+    List,
+    Timeline,
+}
+
+impl Default for AgendaView {
+    fn default() -> Self {
+        AgendaView::List
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum DatePickerField {
+    Scheduled,
+    Due,
+    Start,
+    Time,
+    Duration,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -110,12 +131,23 @@ pub enum FoldOverride {
 
 #[derive(Clone)]
 pub struct AgendaItem {
+    pub kind: AgendaItemKind,
     pub date: NaiveDate,
+    pub time: Option<NaiveTime>,
+    pub duration_minutes: Option<u32>,
     pub text: String,
     pub indent: usize,
     pub is_done: bool,
+    pub priority: Option<Priority>,
+    pub schedule: TaskSchedule,
     pub file_path: String,
     pub line_number: usize,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum AgendaItemKind {
+    Task,
+    Log,
 }
 
 #[derive(Clone)]
@@ -127,8 +159,18 @@ pub struct TaskItem {
     pub line_number: usize,
     pub is_done: bool,
     pub priority: Option<Priority>,
+    pub schedule: TaskSchedule,
     pub task_identity: String,
     pub carryover_from: Option<String>,
+}
+
+#[derive(Clone, Default, Debug, PartialEq, Eq)]
+pub struct TaskSchedule {
+    pub scheduled: Option<NaiveDate>,
+    pub due: Option<NaiveDate>,
+    pub start: Option<NaiveDate>,
+    pub time: Option<NaiveTime>,
+    pub duration_minutes: Option<u32>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

@@ -1,4 +1,5 @@
 use crate::models::Priority;
+use crate::task_metadata::{TaskMetadataKey, remove_task_metadata_token, upsert_task_metadata_token};
 use tui_textarea::{CursorMove, TextArea};
 
 pub(crate) fn insert_newline_with_auto_indent(textarea: &mut TextArea) {
@@ -113,6 +114,46 @@ pub(crate) fn cycle_task_priority(textarea: &mut TextArea) -> bool {
     let indent_len = indent.chars().count();
     let change_start = indent_len.saturating_add(old_prefix_len);
     let new_col = adjust_cursor_for_line_edit(col, &current_line, &new_line, change_start);
+    textarea.move_cursor(CursorMove::Jump(row as u16, new_col as u16));
+    true
+}
+
+pub(crate) fn upsert_task_metadata(
+    textarea: &mut TextArea,
+    key: TaskMetadataKey,
+    value: &str,
+) -> bool {
+    let (row, col) = textarea.cursor();
+    let current_line = textarea
+        .lines()
+        .get(row)
+        .cloned()
+        .unwrap_or_default();
+    let updated = upsert_task_metadata_token(&current_line, key, value);
+    if updated == current_line {
+        return false;
+    }
+
+    replace_current_line(textarea, row, &updated);
+    let new_col = col.min(updated.chars().count());
+    textarea.move_cursor(CursorMove::Jump(row as u16, new_col as u16));
+    true
+}
+
+pub(crate) fn remove_task_metadata(textarea: &mut TextArea, key: TaskMetadataKey) -> bool {
+    let (row, col) = textarea.cursor();
+    let current_line = textarea
+        .lines()
+        .get(row)
+        .cloned()
+        .unwrap_or_default();
+    let updated = remove_task_metadata_token(&current_line, key);
+    if updated == current_line {
+        return false;
+    }
+
+    replace_current_line(textarea, row, &updated);
+    let new_col = col.min(updated.chars().count());
     textarea.move_cursor(CursorMove::Jump(row as u16, new_col as u16));
     true
 }

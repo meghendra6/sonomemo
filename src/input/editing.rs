@@ -36,6 +36,11 @@ pub fn handle_editing_mode(app: &mut App, key: KeyEvent) {
         return;
     }
 
+    if allow_composer_shortcuts && key_match(&key, &app.config.keybindings.composer.date_picker) {
+        app.open_date_picker();
+        return;
+    }
+
     // Simple mode: no Vim keybindings, just forward to textarea
     if !app.is_vim_mode() {
         if key_match(&key, &app.config.keybindings.composer.clear) {
