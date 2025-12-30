@@ -1,16 +1,16 @@
-use chrono::Local;
+use chrono::{Local, Timelike};
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, BorderType, Borders, List, ListItem, Paragraph},
+    widgets::{Block, BorderType, Borders, List, ListItem, ListState, Paragraph},
 };
 
 use crate::app::{App, PLACEHOLDER_COMPOSE};
 use crate::models::{
-    EditorMode, InputMode, NavigateFocus, VisualKind, is_heading_timestamp_line,
-    is_timestamped_line, split_timestamp_line,
+    AgendaItemKind, EditorMode, InputMode, NavigateFocus, VisualKind,
+    is_heading_timestamp_line, is_timestamped_line, split_timestamp_line,
 };
 use ratatui::style::Stylize;
 use regex::Regex;
@@ -24,8 +24,8 @@ pub mod theme;
 
 use components::{centered_column, parse_markdown_spans, wrap_markdown_line};
 use popups::{
-    render_activity_popup, render_agenda_popup, render_date_picker_popup,
-    render_delete_entry_popup, render_editor_style_popup, render_exit_popup, render_help_popup,
+    render_activity_popup, render_date_picker_popup, render_delete_entry_popup,
+    render_editor_style_popup, render_exit_popup, render_help_popup, render_memo_preview_popup,
     render_mood_popup, render_path_popup, render_pomodoro_popup, render_siren_popup,
     render_tag_popup, render_theme_switcher_popup, render_todo_popup,
 };
@@ -70,7 +70,13 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             .split(main_area);
 
         let timeline_area = top_chunks[0];
-        let tasks_area = top_chunks[1];
+        let right_panel = top_chunks[1];
+        let right_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+            .split(right_panel);
+        let agenda_area = right_chunks[0];
+        let tasks_area = right_chunks[1];
         let timeline_inner = Block::default().borders(Borders::ALL).inner(timeline_area);
 
         // Timeline log view
@@ -351,6 +357,8 @@ pub fn ui(f: &mut Frame, app: &mut App) {
 
         let is_timeline_focused =
             app.input_mode == InputMode::Navigate && app.navigate_focus == NavigateFocus::Timeline;
+        let is_agenda_focused =
+            app.input_mode == InputMode::Navigate && app.navigate_focus == NavigateFocus::Agenda;
         let is_tasks_focused =
             app.input_mode == InputMode::Navigate && app.navigate_focus == NavigateFocus::Tasks;
 
@@ -539,6 +547,8 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             app.timeline_ui_state.select(ui_selected_index);
             f.render_stateful_widget(logs_list, timeline_area, &mut app.timeline_ui_state);
         }
+
+        render_agenda_panel(f, app, agenda_area, is_agenda_focused, &tokens);
 
         // Right panel: Today's tasks
         let tasks_inner = Block::default().borders(Borders::ALL).inner(tasks_area);
@@ -887,10 +897,6 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         render_tag_popup(f, app);
     }
 
-    if app.show_agenda_popup {
-        render_agenda_popup(f, app);
-    }
-
     if app.show_date_picker_popup {
         render_date_picker_popup(f, app);
     }
@@ -921,6 +927,10 @@ pub fn ui(f: &mut Frame, app: &mut App) {
 
     if app.show_path_popup {
         render_path_popup(f, app);
+    }
+
+    if app.show_memo_preview_popup {
+        render_memo_preview_popup(f, app);
     }
 }
 
@@ -1330,6 +1340,435 @@ fn bullet_for_level(level: usize) -> char {
     }
 }
 
+fn render_agenda_panel(
+    f: &mut Frame,
+    app: &App,
+    area: Rect,
+    focused: bool,
+    tokens: &theme::ThemeTokens,
+) {
+    if area.height == 0 || area.width == 0 {
+        return;
+    }
+
+    let date_label = app.agenda_selected_day.format("%Y-%m-%d").to_string();
+    let filter_label = app.agenda_filter_label();
+    let unscheduled = if app.agenda_show_unscheduled {
+        "Unsched: on"
+    } else {
+        "Unsched: off"
+    };
+    let title_text = format!("AGENDA {date_label} · {filter_label} · {unscheduled}");
+    let title = truncate(&title_text, area.width.saturating_sub(4) as usize);
+
+    let border_color = if focused {
+        tokens.ui_accent
+    } else {
+        tokens.ui_border_default
+    };
+    let title_style = if focused {
+        Style::default()
+            .fg(tokens.ui_accent)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(tokens.ui_muted)
+    };
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border_color))
+        .title(Line::from(Span::styled(title, title_style)));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let list_width = inner.width.saturating_sub(1).max(1) as usize;
+    let selected = app.agenda_state.selected();
+    let visible = app.agenda_visible_indices();
+    let mut items: Vec<ListItem> = Vec::new();
+    let mut ui_selected_index: Option<usize> = None;
+    let mut ui_index = 0usize;
+
+    let now = Local::now();
+    let is_today = now.date_naive() == app.agenda_selected_day;
+    let now_time = now.time();
+    let cursor_time = selected
+        .and_then(|idx| app.agenda_items.get(idx))
+        .and_then(|item| item.time);
+
+    let cursor_label = cursor_time
+        .map(format_time)
+        .unwrap_or_else(|| "--:--".to_string());
+    let now_label = if is_today {
+        format_time(now_time)
+    } else {
+        "--:--".to_string()
+    };
+    let header = format!(
+        "Filter: {}  | Cursor: {}  | Now: {}",
+        filter_label, cursor_label, now_label
+    );
+    items.push(ListItem::new(Line::from(Span::styled(
+        truncate(&header, list_width),
+        Style::default().fg(tokens.ui_muted),
+    ))));
+    ui_index += 1;
+    items.push(ListItem::new(Line::from("")));
+    ui_index += 1;
+
+    if visible.is_empty() {
+        items.push(ListItem::new(Line::from(Span::styled(
+            "No agenda items.",
+            Style::default().fg(tokens.ui_muted),
+        ))));
+    } else {
+        let mut overdue = Vec::new();
+        let mut all_day = Vec::new();
+        let mut timed = Vec::new();
+        let mut unscheduled_items = Vec::new();
+
+        for idx in visible {
+            let item = &app.agenda_items[idx];
+            let is_overdue = item.kind == AgendaItemKind::Task
+                && item.schedule.due.is_some()
+                && item.schedule.due.unwrap_or(app.agenda_selected_day) < app.agenda_selected_day
+                && !item.is_done;
+            if is_overdue {
+                overdue.push(idx);
+                continue;
+            }
+            if item.kind == AgendaItemKind::Task && item.schedule.is_empty() {
+                unscheduled_items.push(idx);
+                continue;
+            }
+            if item.date != app.agenda_selected_day {
+                continue;
+            }
+            if item.time.is_some() {
+                timed.push(idx);
+            } else {
+                all_day.push(idx);
+            }
+        }
+
+        push_agenda_section(
+            &mut items,
+            &mut ui_index,
+            "OVERDUE",
+            &overdue,
+            selected,
+            &mut ui_selected_index,
+            app,
+            list_width,
+            tokens,
+        );
+        push_agenda_section(
+            &mut items,
+            &mut ui_index,
+            "ALL-DAY",
+            &all_day,
+            selected,
+            &mut ui_selected_index,
+            app,
+            list_width,
+            tokens,
+        );
+
+        items.push(ListItem::new(Line::from(Span::styled(
+            "Time  | Timeline",
+            Style::default()
+                .fg(tokens.ui_accent)
+                .add_modifier(Modifier::BOLD),
+        ))));
+        ui_index += 1;
+
+        let slot_minutes: i32 = 30;
+        let window_start_min: i32 = 6 * 60;
+        let window_end_min: i32 = 22 * 60;
+        let row_count =
+            ((window_end_min - window_start_min) / slot_minutes).max(0) as usize + 1;
+
+        let mut blocks = build_agenda_blocks(&timed, app, app.agenda_selected_day);
+        blocks.sort_by_key(|block| (block.start_min, block.end_min, block.idx));
+
+        let mut row_blocks: Vec<Vec<usize>> = vec![Vec::new(); row_count];
+        let mut block_start_row: std::collections::HashMap<usize, usize> =
+            std::collections::HashMap::new();
+
+        for (block_idx, block) in blocks.iter().enumerate() {
+            let start_row = ((block.start_min - window_start_min).max(0) / slot_minutes) as usize;
+            let end_row = ((block.end_min - window_start_min + slot_minutes - 1).max(0)
+                / slot_minutes) as usize;
+            let end_row = end_row.max(start_row + 1);
+            block_start_row.insert(block.idx, start_row);
+
+            for row in start_row..end_row {
+                if row < row_count {
+                    row_blocks[row].push(block_idx);
+                }
+            }
+        }
+
+        let now_min = now_time.hour() as i32 * 60 + now_time.minute() as i32;
+        let now_row = if is_today
+            && now_min >= window_start_min
+            && now_min < window_end_min + slot_minutes
+        {
+            Some(((now_min - window_start_min) / slot_minutes) as usize)
+        } else {
+            None
+        };
+
+        let time_width = 5usize;
+        let separator = " | ";
+        let content_width = list_width.saturating_sub(time_width + separator.len()).max(1);
+        for row in 0..row_count {
+            let time_min = window_start_min + row as i32 * slot_minutes;
+            let time_label = format!("{:02}:{:02}", time_min / 60, time_min % 60);
+            let mut content = String::new();
+            if let Some(block_indices) = row_blocks.get(row)
+                && !block_indices.is_empty()
+            {
+                let starting_blocks: Vec<usize> = block_indices
+                    .iter()
+                    .filter(|block_idx| {
+                        block_start_row.get(&blocks[**block_idx].idx) == Some(&row)
+                    })
+                    .copied()
+                    .collect();
+                let selected_block = selected.and_then(|selected_idx| {
+                    starting_blocks
+                        .iter()
+                        .find(|block_idx| blocks[**block_idx].idx == selected_idx)
+                        .copied()
+                });
+                let display_idx = selected_block
+                    .or_else(|| starting_blocks.first().copied())
+                    .unwrap_or(block_indices[0]);
+                let block = &blocks[display_idx];
+                let prefix = block.prefix;
+                let extra = if block_indices.len() > 1 {
+                    format!(" (+{})", block_indices.len() - 1)
+                } else {
+                    String::new()
+                };
+                if block_start_row.get(&block.idx) == Some(&row) {
+                    content = format!("{prefix} {}{}", block.label, extra);
+                    if selected == Some(block.idx) {
+                        ui_selected_index = Some(ui_index);
+                    }
+                } else {
+                    content = format!("{prefix}{}", extra);
+                }
+            } else if now_row == Some(row) {
+                content = format!("---- NOW {} ----", now_label);
+            }
+
+            let content = truncate(&content, content_width);
+            let line = format!("{time_label}{separator}{content}");
+            items.push(ListItem::new(Line::from(line)));
+            ui_index += 1;
+        }
+
+        if app.agenda_show_unscheduled && !unscheduled_items.is_empty() {
+            items.push(ListItem::new(Line::from("")));
+            ui_index += 1;
+            push_agenda_section(
+                &mut items,
+                &mut ui_index,
+                "UNSCHEDULED",
+                &unscheduled_items,
+                selected,
+                &mut ui_selected_index,
+                app,
+                list_width,
+                tokens,
+            );
+        }
+    }
+
+    let highlight_bg = tokens.ui_selection_bg;
+    let highlight_style = if focused {
+        Style::default()
+            .bg(highlight_bg)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().bg(highlight_bg)
+    };
+
+    let list = List::new(items)
+        .highlight_symbol("")
+        .highlight_style(highlight_style);
+    let mut state = ListState::default();
+    state.select(ui_selected_index);
+    f.render_stateful_widget(list, inner, &mut state);
+}
+
+struct AgendaBlock {
+    idx: usize,
+    start_min: i32,
+    end_min: i32,
+    label: String,
+    prefix: &'static str,
+}
+
+fn build_agenda_blocks(
+    timed: &[usize],
+    app: &App,
+    day: chrono::NaiveDate,
+) -> Vec<AgendaBlock> {
+    let mut blocks = Vec::new();
+    for idx in timed {
+        let item = &app.agenda_items[*idx];
+        let Some(time) = item.time else { continue };
+        let start_min = time.hour() as i32 * 60 + time.minute() as i32;
+        let mut duration = item.duration_minutes.unwrap_or(30) as i32;
+        if duration <= 0 {
+            duration = 30;
+        }
+        let end_min = (start_min + duration).min(24 * 60);
+        let label = format!(
+            "{} {}-{}",
+            agenda_item_label(item, day),
+            format_time(time),
+            format_time_minutes(end_min)
+        );
+        let prefix = match item.kind {
+            AgendaItemKind::Task => "####",
+            AgendaItemKind::Note => "....",
+        };
+        blocks.push(AgendaBlock {
+            idx: *idx,
+            start_min,
+            end_min,
+            label,
+            prefix,
+        });
+    }
+    blocks
+}
+
+fn push_agenda_section(
+    items: &mut Vec<ListItem>,
+    ui_index: &mut usize,
+    label: &str,
+    indices: &[usize],
+    selected: Option<usize>,
+    ui_selected_index: &mut Option<usize>,
+    app: &App,
+    list_width: usize,
+    tokens: &theme::ThemeTokens,
+) {
+    if indices.is_empty() {
+        return;
+    }
+
+    items.push(ListItem::new(Line::from(Span::styled(
+        label.to_string(),
+        Style::default()
+            .fg(tokens.ui_accent)
+            .add_modifier(Modifier::BOLD),
+    ))));
+    *ui_index += 1;
+
+    for idx in indices {
+        if selected == Some(*idx) {
+            *ui_selected_index = Some(*ui_index);
+        }
+        let line = agenda_item_label(&app.agenda_items[*idx], app.agenda_selected_day);
+        let wrapped = wrap_markdown_line(&line, list_width);
+        let lines: Vec<Line<'static>> = wrapped
+            .iter()
+            .map(|l| {
+                Line::from(parse_markdown_spans(
+                    l,
+                    &app.config.theme,
+                    false,
+                    None,
+                    Style::default(),
+                ))
+            })
+            .collect();
+        items.push(ListItem::new(Text::from(lines)));
+        *ui_index += 1;
+    }
+
+    items.push(ListItem::new(Line::from("")));
+    *ui_index += 1;
+}
+
+fn agenda_item_label(item: &crate::models::AgendaItem, day: chrono::NaiveDate) -> String {
+    let mut line = String::new();
+    line.push_str(&"  ".repeat(item.indent));
+
+    match item.kind {
+        AgendaItemKind::Task => {
+            if item.is_done {
+                line.push_str("- [x] ");
+            } else {
+                line.push_str("- [ ] ");
+            }
+        }
+        AgendaItemKind::Note => {
+            line.push_str("• ");
+        }
+    }
+
+    let badges = agenda_badges(item, day);
+    if !badges.is_empty() {
+        line.push_str(&badges);
+        line.push(' ');
+    }
+    line.push_str(&item.text);
+    if let Some(minutes) = item.duration_minutes {
+        line.push_str(&format!(" ({})", format_duration(minutes)));
+    }
+    line
+}
+
+fn agenda_badges(item: &crate::models::AgendaItem, day: chrono::NaiveDate) -> String {
+    let mut badges = Vec::new();
+    if item.schedule.scheduled.is_some() {
+        badges.push("[S]");
+    }
+    if item.schedule.due.is_some() {
+        badges.push("[D]");
+    }
+    if item.time.is_some() {
+        badges.push("[T]");
+    }
+    if item.kind == AgendaItemKind::Task
+        && item.schedule.due.is_some()
+        && item.schedule.due.unwrap_or(day) < day
+        && !item.is_done
+    {
+        badges.push("[O]");
+    }
+    badges.join("")
+}
+
+fn format_time(time: chrono::NaiveTime) -> String {
+    format!("{:02}:{:02}", time.hour(), time.minute())
+}
+
+fn format_time_minutes(total_minutes: i32) -> String {
+    let total = total_minutes.clamp(0, 24 * 60);
+    let hours = total / 60;
+    let minutes = total % 60;
+    format!("{:02}:{:02}", hours, minutes)
+}
+
+fn format_duration(minutes: u32) -> String {
+    let hours = minutes / 60;
+    let mins = minutes % 60;
+    if hours > 0 && mins > 0 {
+        format!("{hours}h{mins}m")
+    } else if hours > 0 {
+        format!("{hours}h")
+    } else {
+        format!("{minutes}m")
+    }
+}
+
 fn render_status_bar(f: &mut Frame, area: Rect, app: &App, tokens: &theme::ThemeTokens) {
     if area.height == 0 || area.width == 0 {
         return;
@@ -1338,6 +1777,7 @@ fn render_status_bar(f: &mut Frame, area: Rect, app: &App, tokens: &theme::Theme
     let mode_label = match app.input_mode {
         InputMode::Navigate => match app.navigate_focus {
             NavigateFocus::Timeline => "NAV:TL",
+            NavigateFocus::Agenda => "NAV:AG",
             NavigateFocus::Tasks => "NAV:TS",
         },
         InputMode::Editing => match app.editor_mode {
@@ -1445,6 +1885,11 @@ fn status_file_label(app: &App) -> String {
                 .selected()
                 .and_then(|i| app.logs.get(i))
                 .map(|entry| entry.file_path.as_str()),
+            NavigateFocus::Agenda => app
+                .agenda_state
+                .selected()
+                .and_then(|i| app.agenda_items.get(i))
+                .map(|item| item.file_path.as_str()),
             NavigateFocus::Tasks => app
                 .tasks_state
                 .selected()

@@ -2,16 +2,19 @@
 
 Purpose
 - Add a timeline-style agenda view that is usable without manual date typing.
+- Replace the separate agenda popup with an always-visible agenda panel.
 - Keep all scheduling metadata inside plain Markdown lines for Obsidian compatibility.
 - Be explicit enough to implement directly (data model, parsing rules, UI layout, actions).
 
-Scope (v1)
-- Agenda: list view + timeline view for a selected day.
+Scope (v2)
+- Agenda panel: timeline view for a selected day (no separate popup list).
+- Right panel is split: Agenda (top) + Tasks (bottom).
 - Task metadata: scheduled, due, start, time, duration (optional).
+- Notes (non-task lines) with dates also appear in agenda.
 - Fast date/time input via a picker + relative shortcuts.
-- Jump from agenda to timeline entry (existing behavior).
+- Enter on agenda item opens a memo preview popup.
 
-Non-goals (v1)
+Non-goals (v2)
 - Full week grid with multi-day blocks.
 - Recurrence rules (daily/weekly) beyond a simple placeholder.
 - Time tracking / time blocks tied to actual effort.
@@ -67,8 +70,8 @@ struct TaskItem {
   display_text: String    // line text with tokens stripped
 }
 
-2.3 AgendaEntry (new, merged source)
-enum AgendaEntryKind { Task, Log }
+2.3 AgendaEntry (merged source)
+enum AgendaEntryKind { Task, Note }
 struct AgendaEntry {
   kind: AgendaEntryKind
   date: NaiveDate
@@ -92,51 +95,70 @@ Overdue
 - A task is overdue if: due exists AND due < selected_day AND not done.
 - Overdue tasks appear in a separate "Overdue" lane for the selected day.
 
-3) Agenda Views (UI)
+3) Agenda Panel (UI)
 
-3.1 List View (existing, enhanced)
-- Group by date (same as today).
-- Show badges inline: [S] for scheduled, [D] for due, [T] for time.
-- Overdue tasks appear at the top of each day with a red "OVERDUE" label.
-- Sorting inside a day:
-  1) Overdue first
-  2) Time ascending
-  3) Priority (High -> Low -> None)
-  4) Line order
+3.1 Layout (Right Panel Split)
+- Screen layout: left Timeline, right panel split horizontally.
+- Right panel top: Agenda (timeline view for selected day).
+- Right panel bottom: Tasks (existing tasks list).
+- Default split ratio: Agenda 60%, Tasks 40% (adjustable later if needed).
+- Agenda is always visible; no separate agenda popup in v2.
 
-3.2 Timeline View (new, selected day)
-Layout (popup 80x70 by default)
+3.2 Timeline View (Agenda Panel, selected day)
 Header:
-- "Agenda: Timeline" + date label + hints
+- "Agenda" + date label + filter state + hints (eg: "Open | Day").
 Body:
-- Row 1: "All-day" lane for tasks without time or outside range
-- Rows below: time-ordered list with a fixed time column (default range 06:00 - 22:00)
-Left column (width 6): time labels (e.g., "06:00")
-Main column: items listed at their time; no block spanning in v1
+- Section 1: Overdue (if any)
+- Section 2: All-day (date-only items)
+- Section 3: Timed (time-ordered list with a fixed time column)
+- Section 4: Unscheduled (optional, collapsed by default)
 
 Rendering rules
-- Task with time: appears at its time row.
-- Task with duration: render as a block spanning multiple rows (v1 can show "(90m)" text without block).
-- Task with only due/scheduled: shown in All-day lane with badges.
-- Log entry (from timeline): show as a dot + text at its timestamp.
-- Overdue tasks: show in an "Overdue" lane above All-day.
-- Done tasks: dim style; optionally hidden by filter.
+- Task with time: appears in Timed at its time.
+- Task with duration: show "(90m)" after text (no block spanning in v2).
+- Task with only date (scheduled/due/start): appears in All-day with badges.
+- Task with no date/time: appears in Unscheduled section (collapsed by default).
+- Note (non-task line) with date/time: appears with "•" prefix (no checkbox).
+- Log entries are not shown in Agenda v2 (Timeline already provides them).
+- Done tasks: hidden by default, shown when filter includes Done/All.
 
-3.3 Day Navigation
-- Left/Right or H/L: move selected day by 1 day.
+3.3 Memo Preview Popup
+- Enter on any agenda item opens a read-only memo preview popup.
+- Popup shows the full entry containing the item.
+- Keys: Esc close, E edit entry, J/K scroll.
+
+3.4 Day Navigation
+- H/L or Left/Right: move selected day by 1 day.
 - PgUp/PgDn: move by 1 week.
-- T: toggle List <-> Timeline.
-- Enter: jump to source entry in Timeline panel (existing).
+- G: jump to today.
+
+3.5 Focus Model
+- Focus targets: Timeline (left), Agenda (right-top), Tasks (right-bottom), Composer.
+- Tab / Shift+Tab cycles focus across these panes.
+- Global focus bindings:
+  - Ctrl+H/J/K/L: move focus (state-aware)
+  - A: focus Agenda
+  - I: focus Composer
 
 4) Interaction and Keybindings
 
-Agenda popup (new bindings in popup handler)
-- Up/Down: move selection
-- Enter: jump to selected entry
-- Esc: close
-- T: toggle view (list/timeline)
-- H/L or Left/Right: change day
+Agenda panel (focused)
+- Up/Down or J/K: move selection
+- Enter: open memo preview popup
+- Space: toggle task checkbox (tasks only)
 - F: cycle filter (Open -> Done -> All)
+- U: toggle Unscheduled section
+- H/L or Left/Right: change day
+- PgUp/PgDn: change week
+- G: jump to today
+
+Timeline panel (focused)
+- Space toggles task checkbox (no Enter toggle).
+- Enter opens edit for the entry (keeps toggle on Space only).
+
+Tasks panel (focused)
+- Space toggles task checkbox (no Enter toggle).
+- Enter opens source entry (or edit).
 
 Composer (date/time insert)
 - New keybinding: open date/time picker (default: Ctrl+;)
@@ -194,7 +216,8 @@ New functions (storage)
   - Returns schedule + display_text (tokens removed)
 - format_task_metadata(schedule: &TaskSchedule) -> String
 - read_agenda_entries(start, end) -> Vec<AgendaEntry>
-  - Merge tasks + log entries
+  - Merge tasks + notes
+  - Notes: any non-task line with valid date tokens
   - Apply date_for_agenda and time parsing
 
 Parsing strategy (tokens)
@@ -223,9 +246,10 @@ Unit tests
 - agenda grouping rules (scheduled vs due vs file date).
 
 UI tests (manual)
-- Toggle list/timeline, day navigation.
+- Agenda panel renders with Timeline + Tasks split.
+- Day navigation and filters in agenda panel.
 - Overdue rendering.
-- Jump to timeline entry.
+- Memo preview popup opens from agenda.
 
 10) PR Design (Breakdown)
 
