@@ -237,17 +237,17 @@ pub struct GlobalBindings {
 impl Default for GlobalBindings {
     fn default() -> Self {
         Self {
-            quit: vec!["ctrl+q".to_string(), "q".to_string()],
+            quit: vec!["ctrl+q".to_string()],
             help: vec!["?".to_string()],
-            focus_timeline: vec!["h".to_string()],
-            focus_tasks: vec!["l".to_string()],
-            focus_composer: vec!["i".to_string()],
+            focus_timeline: vec!["left".to_string()],
+            focus_tasks: vec!["right".to_string()],
+            focus_composer: vec!["c".to_string()],
             focus_next: vec!["tab".to_string()],
             focus_prev: vec!["backtab".to_string()],
-            quick_capture: vec!["ctrl+enter".to_string()],
-            search: vec!["/".to_string()],
+            quick_capture: vec!["q".to_string(), "ctrl+enter".to_string()],
+            search: vec!["ctrl+f".to_string(), "/".to_string()],
             tags: vec!["t".to_string()],
-            activity: vec!["g".to_string()],
+            activity: vec!["a".to_string()],
             log_dir: vec!["o".to_string()],
             pomodoro: vec!["p".to_string()],
             jump_to_now: vec!["shift+n".to_string()],
@@ -284,7 +284,7 @@ impl Default for TimelineBindings {
             toggle_todo: vec!["enter".to_string(), "space".to_string()],
             open: vec!["enter".to_string()],
             edit: vec!["e".to_string()],
-            delete_entry: vec!["x".to_string()],
+            delete_entry: vec!["delete".to_string(), "x".to_string()],
         }
     }
 }
@@ -782,6 +782,35 @@ impl Config {
                 .any(|k| k.eq_ignore_ascii_case("shift+enter"))
         {
             self.keybindings.composer.submit = vec!["shift+enter".to_string()];
+            changed = true;
+        }
+
+        let quick_has_q = self
+            .keybindings
+            .global
+            .quick_capture
+            .iter()
+            .any(|k| k.eq_ignore_ascii_case("q"));
+        let quit_has_q = self
+            .keybindings
+            .global
+            .quit
+            .iter()
+            .any(|k| k.eq_ignore_ascii_case("q"));
+        if quick_has_q && quit_has_q {
+            let filtered: Vec<String> = self
+                .keybindings
+                .global
+                .quit
+                .iter()
+                .filter(|k| !k.eq_ignore_ascii_case("q"))
+                .cloned()
+                .collect();
+            if filtered.is_empty() {
+                self.keybindings.global.quit = vec!["ctrl+q".to_string()];
+            } else {
+                self.keybindings.global.quit = filtered;
+            }
             changed = true;
         }
 
