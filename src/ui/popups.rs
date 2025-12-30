@@ -401,6 +401,7 @@ pub fn render_help_popup(f: &mut Frame, app: &App) {
                 ("Up", fmt_keys(&kb.tasks.up)),
                 ("Down", fmt_keys(&kb.tasks.down)),
                 ("Toggle", fmt_keys(&kb.tasks.toggle)),
+                ("Priority cycle", fmt_keys(&kb.tasks.priority_cycle)),
                 ("Pomodoro", fmt_keys(&kb.tasks.start_pomodoro)),
                 ("Edit", fmt_keys(&kb.tasks.edit)),
                 ("Filter toggle", fmt_keys(&kb.tasks.filter_toggle)),
@@ -419,6 +420,8 @@ pub fn render_help_popup(f: &mut Frame, app: &App) {
                 let mut composer_entries = vec![
                     ("Save", fmt_keys(&kb.composer.submit)),
                     ("New line", fmt_keys(&kb.composer.newline)),
+                    ("Toggle task", fmt_keys(&kb.composer.task_toggle)),
+                    ("Priority cycle", fmt_keys(&kb.composer.priority_cycle)),
                     ("Indent", fmt_keys(&kb.composer.indent)),
                     ("Outdent", fmt_keys(&kb.composer.outdent)),
                     ("Clear", fmt_keys(&kb.composer.clear)),

@@ -506,6 +506,73 @@ pub fn toggle_task_status(file_path: &str, line_number: usize) -> io::Result<()>
     Ok(())
 }
 
+/// Cycles task priority marker (None -> A -> B -> C -> None) at the given line.
+pub fn cycle_task_priority(file_path: &str, line_number: usize) -> io::Result<bool> {
+    let content = fs::read_to_string(file_path)?;
+    let mut lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
+
+    if line_number >= lines.len() {
+        return Ok(false);
+    }
+
+    let line = lines[line_number].clone();
+    let stripped = strip_timestamp_prefix(&line);
+    let prefix_len = line.len().saturating_sub(stripped.len());
+    let (indent_bytes, _) = parse_indent(stripped);
+    let body_start = prefix_len.saturating_add(indent_bytes);
+    if body_start > line.len() {
+        return Ok(false);
+    }
+    let (prefix, body) = line.split_at(body_start);
+
+    let (checkbox, after_checkbox) = if let Some(text) = body.strip_prefix("- [ ] ") {
+        ("- [ ] ", text)
+    } else if let Some(text) = body.strip_prefix("- [x] ") {
+        ("- [x] ", text)
+    } else if let Some(text) = body.strip_prefix("- [X] ") {
+        ("- [X] ", text)
+    } else {
+        return Ok(false);
+    };
+
+    let trimmed = after_checkbox.trim_start();
+    let current = parse_priority_marker(trimmed);
+    let base_text = strip_priority_marker(trimmed);
+    let next = match current {
+        None => Some(Priority::High),
+        Some(Priority::High) => Some(Priority::Medium),
+        Some(Priority::Medium) => Some(Priority::Low),
+        Some(Priority::Low) => None,
+    };
+
+    let mut new_body = String::new();
+    new_body.push_str(checkbox);
+    if let Some(priority) = next {
+        new_body.push_str("[#");
+        new_body.push(priority.as_char());
+        new_body.push(']');
+        if !base_text.is_empty() {
+            new_body.push(' ');
+        }
+    }
+    new_body.push_str(&base_text);
+
+    let updated_line = format!("{prefix}{new_body}");
+    if updated_line == line {
+        return Ok(false);
+    }
+
+    lines[line_number] = updated_line;
+    let mut new_content = lines.join("\n");
+    if !new_content.ends_with('\n') {
+        new_content.push('\n');
+    }
+    let mut file = fs::File::create(file_path)?;
+    file.write_all(new_content.as_bytes())?;
+
+    Ok(true)
+}
+
 fn extract_date_from_path(file_path: &str) -> Option<NaiveDate> {
     let path = Path::new(file_path);
     let stem = path.file_stem()?.to_str()?;
@@ -954,6 +1021,30 @@ mod tests {
         let line = "- [ ] [#B] Task Name";
         let parsed = parse_task_line(line).expect("parsed");
         assert_eq!(parsed.identity, normalize_task_text("Task Name"));
+    }
+
+    #[test]
+    fn cycle_task_priority_updates_marker() {
+        let dir = temp_log_dir();
+        let path = get_file_path_for_date(&dir, "2024-01-01");
+        fs::write(&path, "- [ ] Task\n").expect("write log");
+        let path_str = path.to_string_lossy().to_string();
+
+        assert!(cycle_task_priority(&path_str, 0).expect("cycle A"));
+        let content = fs::read_to_string(&path).expect("read log");
+        assert_eq!(content.lines().next().unwrap_or(""), "- [ ] [#A] Task");
+
+        assert!(cycle_task_priority(&path_str, 0).expect("cycle B"));
+        let content = fs::read_to_string(&path).expect("read log");
+        assert_eq!(content.lines().next().unwrap_or(""), "- [ ] [#B] Task");
+
+        assert!(cycle_task_priority(&path_str, 0).expect("cycle C"));
+        let content = fs::read_to_string(&path).expect("read log");
+        assert_eq!(content.lines().next().unwrap_or(""), "- [ ] [#C] Task");
+
+        assert!(cycle_task_priority(&path_str, 0).expect("cycle clear"));
+        let content = fs::read_to_string(&path).expect("read log");
+        assert_eq!(content.lines().next().unwrap_or(""), "- [ ] Task");
     }
 
     fn write_log(dir: &Path, date: &str, content: &str) {

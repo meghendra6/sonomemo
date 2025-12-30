@@ -15,6 +15,27 @@ pub fn handle_editing_mode(app: &mut App, key: KeyEvent) {
         return;
     }
 
+    let allow_composer_shortcuts =
+        !app.is_vim_mode() || matches!(app.editor_mode, EditorMode::Insert);
+
+    if allow_composer_shortcuts && key_match(&key, &app.config.keybindings.composer.task_toggle) {
+        if markdown::toggle_task_checkbox(&mut app.textarea) {
+            app.mark_insert_modified();
+            app.composer_dirty = true;
+        }
+        return;
+    }
+
+    if allow_composer_shortcuts
+        && key_match(&key, &app.config.keybindings.composer.priority_cycle)
+    {
+        if markdown::cycle_task_priority(&mut app.textarea) {
+            app.mark_insert_modified();
+            app.composer_dirty = true;
+        }
+        return;
+    }
+
     // Simple mode: no Vim keybindings, just forward to textarea
     if !app.is_vim_mode() {
         if key_match(&key, &app.config.keybindings.composer.clear) {

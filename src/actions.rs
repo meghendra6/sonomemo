@@ -1,7 +1,8 @@
 use crate::{
     app::App,
     config::{EditorStyle, ThemePreset},
-    models, storage,
+    models::{self, Priority},
+    storage,
 };
 use chrono::{Duration, Local};
 
@@ -58,10 +59,48 @@ pub fn complete_task_chain(app: &mut App) {
     }
 }
 
+pub fn cycle_task_priority(app: &mut App) {
+    let Some(i) = app.tasks_state.selected() else {
+        app.toast("No task selected.");
+        return;
+    };
+    if i >= app.tasks.len() {
+        app.toast("No task selected.");
+        return;
+    }
+
+    let task = app.tasks[i].clone();
+    let next = next_priority(task.priority);
+    let message = match next {
+        Some(Priority::High) => "Priority A",
+        Some(Priority::Medium) => "Priority B",
+        Some(Priority::Low) => "Priority C",
+        None => "Priority cleared",
+    };
+
+    match storage::cycle_task_priority(&task.file_path, task.line_number) {
+        Ok(true) => {
+            app.update_logs();
+            app.toast(message);
+        }
+        Ok(false) => app.toast("Task not found."),
+        Err(_) => app.toast("Failed to update priority."),
+    }
+}
+
 pub fn open_activity_popup(app: &mut App) {
     if let Ok(data) = storage::get_activity_stats(&app.config.data.log_path) {
         app.activity_data = data;
         app.show_activity_popup = true;
+    }
+}
+
+fn next_priority(current: Option<Priority>) -> Option<Priority> {
+    match current {
+        None => Some(Priority::High),
+        Some(Priority::High) => Some(Priority::Medium),
+        Some(Priority::Medium) => Some(Priority::Low),
+        Some(Priority::Low) => None,
     }
 }
 

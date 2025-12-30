@@ -96,8 +96,20 @@ All keybindings are configurable in `config.toml`.
 
 - Global: `?` help, `h/l` focus, `i` compose, `/` search, `t` tags, `g` activity, `A` agenda, `T` theme presets, `p` pomodoro, `o` log dir, `Ctrl+Q` quit
 - Timeline: `j/k` move, `Tab` fold entry, `Shift+Tab` cycle overview/contents/show-all, `e` edit entry, `Enter/Space` toggle checkbox
-- Tasks: `j/k` move, `Enter/Space` toggle checkbox, `p` start/stop pomodoro, `e` edit source entry
-- Composer: `Enter` newline, `Shift+Enter` save, `Tab/Shift+Tab` indent/outdent, `Esc` back
+- Tasks: `j/k` move, `Enter/Space` toggle checkbox, `Shift+P` cycle priority, `p` start/stop pomodoro, `e` edit source entry
+- Composer: `Enter` newline, `Shift+Enter` save, `Ctrl+T` toggle task, `Ctrl+P` cycle priority, `Tab/Shift+Tab` indent/outdent, `Esc` back
+
+## Task priorities
+
+Use priority markers right after the checkbox: `[#A]` (high), `[#B]` (medium), `[#C]` (low).
+Example:
+
+```
+- [ ] [#A] Important task
+```
+
+You can cycle priority in the composer with `Ctrl+P` (insert mode) or in the Tasks panel with `Shift+P`.
+Tasks are sorted by priority (A → B → C → none).
 
 ## License
 

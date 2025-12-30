@@ -284,6 +284,7 @@ pub struct TasksBindings {
     pub start_pomodoro: Vec<String>,
     pub open: Vec<String>,
     pub edit: Vec<String>,
+    pub priority_cycle: Vec<String>,
     pub filter_toggle: Vec<String>,
     pub filter_open: Vec<String>,
     pub filter_done: Vec<String>,
@@ -299,6 +300,7 @@ impl Default for TasksBindings {
             start_pomodoro: vec!["p".to_string()],
             open: vec!["enter".to_string()],
             edit: vec!["e".to_string()],
+            priority_cycle: vec!["shift+p".to_string()],
             filter_toggle: vec!["f".to_string()],
             filter_open: vec!["1".to_string()],
             filter_done: vec!["2".to_string()],
@@ -316,6 +318,8 @@ pub struct ComposerBindings {
     pub clear: Vec<String>,
     pub indent: Vec<String>,
     pub outdent: Vec<String>,
+    pub task_toggle: Vec<String>,
+    pub priority_cycle: Vec<String>,
 }
 
 impl Default for ComposerBindings {
@@ -327,6 +331,8 @@ impl Default for ComposerBindings {
             clear: vec!["ctrl+l".to_string()],
             indent: vec!["tab".to_string()],
             outdent: vec!["backtab".to_string()],
+            task_toggle: vec!["ctrl+t".to_string()],
+            priority_cycle: vec!["ctrl+p".to_string()],
         }
     }
 }
