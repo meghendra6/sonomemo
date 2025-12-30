@@ -328,7 +328,7 @@ impl Default for ComposerBindings {
             cancel: vec!["esc".to_string()],
             newline: vec!["enter".to_string()],
             submit: vec!["shift+enter".to_string()],
-            clear: vec!["ctrl+l".to_string()],
+            clear: Vec::new(),
             indent: vec!["tab".to_string()],
             outdent: vec!["backtab".to_string()],
             task_toggle: vec!["ctrl+t".to_string()],
@@ -350,7 +350,7 @@ impl Default for SearchBindings {
         Self {
             submit: vec!["enter".to_string()],
             cancel: vec!["esc".to_string()],
-            clear: vec!["ctrl+l".to_string()],
+            clear: Vec::new(),
         }
     }
 }
@@ -775,8 +775,20 @@ impl Config {
             changed = true;
         }
 
+        let removed_composer = remove_keybinding(&mut self.keybindings.composer.clear, "ctrl+l");
+        let removed_search = remove_keybinding(&mut self.keybindings.search.clear, "ctrl+l");
+        if removed_composer || removed_search {
+            changed = true;
+        }
+
         changed
     }
+}
+
+fn remove_keybinding(list: &mut Vec<String>, key: &str) -> bool {
+    let before = list.len();
+    list.retain(|k| !k.eq_ignore_ascii_case(key));
+    before != list.len()
 }
 
 #[cfg(test)]

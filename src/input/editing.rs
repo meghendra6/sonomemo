@@ -45,7 +45,7 @@ pub fn handle_editing_mode(app: &mut App, key: KeyEvent) {
         }
 
         if key_match(&key, &app.config.keybindings.composer.cancel) {
-            cancel_composer(app);
+            request_exit_composer(app);
             return;
         }
 
@@ -99,7 +99,7 @@ pub fn handle_editing_mode(app: &mut App, key: KeyEvent) {
         && matches!(app.editor_mode, EditorMode::Normal)
     {
         app.commit_insert_group();
-        cancel_composer(app);
+        request_exit_composer(app);
         return;
     }
 
@@ -110,17 +110,22 @@ pub fn handle_editing_mode(app: &mut App, key: KeyEvent) {
     }
 }
 
-fn cancel_composer(app: &mut App) {
+fn request_exit_composer(app: &mut App) {
     if composer_has_unsaved_input(app) {
-        app.show_discard_popup = true;
+        app.show_exit_popup = true;
     } else {
-        app.editing_entry = None;
-        app.textarea = tui_textarea::TextArea::default();
-        app.transition_to(InputMode::Navigate);
+        discard_composer(app);
     }
 }
 
-fn submit_composer(app: &mut App) {
+pub(crate) fn discard_composer(app: &mut App) {
+    app.editing_entry = None;
+    app.textarea = tui_textarea::TextArea::default();
+    app.composer_dirty = false;
+    app.transition_to(InputMode::Navigate);
+}
+
+pub(crate) fn submit_composer(app: &mut App) {
     let lines = app.textarea.lines().to_vec();
     let is_empty = lines.iter().all(|l| l.trim().is_empty());
 
