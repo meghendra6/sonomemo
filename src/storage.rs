@@ -1,6 +1,6 @@
 use crate::models::{
     AgendaItem, AgendaItemKind, Priority, LogEntry, TaskItem, count_trailing_tomatoes,
-    is_timestamped_line, split_timestamp_line, strip_timestamp_prefix, strip_trailing_tomatoes,
+    is_timestamped_line, strip_timestamp_prefix, strip_trailing_tomatoes,
 };
 use crate::task_metadata::{parse_task_metadata, strip_task_metadata_tokens};
 use chrono::{Duration, Local, NaiveDate};
@@ -108,6 +108,17 @@ pub fn read_entries_for_date_range(
     Ok(all_entries)
 }
 
+pub fn read_entry_containing_line(
+    file_path: &str,
+    line_number: usize,
+) -> io::Result<Option<LogEntry>> {
+    let content = fs::read_to_string(file_path)?;
+    let entries = parse_log_content(&content, file_path);
+    Ok(entries
+        .into_iter()
+        .find(|entry| entry.line_number <= line_number && line_number <= entry.end_line))
+}
+
 /// Returns a list of available log dates in the log directory (sorted ascending).
 pub fn get_available_log_dates(log_path: &Path) -> io::Result<Vec<NaiveDate>> {
     ensure_log_dir(log_path)?;
@@ -157,37 +168,37 @@ pub fn read_tasks_for_date_range(
 ) -> io::Result<Vec<AgendaItem>> {
     ensure_log_dir(log_path)?;
     let mut items = Vec::new();
-
-    let mut current = start_date;
-    while current <= end_date {
-        let date_str = current.format("%Y-%m-%d").to_string();
+    let dates = get_available_log_dates(log_path).unwrap_or_default();
+    for date in dates {
+        let date_str = date.format("%Y-%m-%d").to_string();
         let path = get_file_path_for_date(log_path, &date_str);
-        if path.exists() {
-            let path_str = path.to_string_lossy().to_string();
-            if let Ok(content) = fs::read_to_string(&path) {
-                let tasks = parse_task_content(&content, &path_str);
-                for task in tasks {
-                    let agenda_date = agenda_date_for_task(&task, current);
-                    if agenda_date < start_date || agenda_date > end_date {
-                        continue;
-                    }
-                    items.push(AgendaItem {
-                        kind: AgendaItemKind::Task,
-                        date: agenda_date,
-                        time: task.schedule.time,
-                        duration_minutes: task.schedule.duration_minutes,
-                        text: task.text,
-                        indent: task.indent,
-                        is_done: task.is_done,
-                        priority: task.priority,
-                        schedule: task.schedule.clone(),
-                        file_path: task.file_path,
-                        line_number: task.line_number,
-                    });
+        if !path.exists() {
+            continue;
+        }
+        let path_str = path.to_string_lossy().to_string();
+        if let Ok(content) = fs::read_to_string(&path) {
+            let tasks = parse_task_content(&content, &path_str);
+            for task in tasks {
+                let agenda_date = agenda_date_for_task(&task, date);
+                let is_unscheduled = task.schedule.is_empty();
+                if !is_unscheduled && (agenda_date < start_date || agenda_date > end_date) {
+                    continue;
                 }
+                items.push(AgendaItem {
+                    kind: AgendaItemKind::Task,
+                    date: agenda_date,
+                    time: task.schedule.time,
+                    duration_minutes: task.schedule.duration_minutes,
+                    text: task.text,
+                    indent: task.indent,
+                    is_done: task.is_done,
+                    priority: task.priority,
+                    schedule: task.schedule.clone(),
+                    file_path: task.file_path,
+                    line_number: task.line_number,
+                });
             }
         }
-        current += Duration::days(1);
     }
 
     Ok(items)
@@ -199,37 +210,7 @@ pub fn read_agenda_entries(
     end_date: NaiveDate,
 ) -> io::Result<Vec<AgendaItem>> {
     let mut items = read_tasks_for_date_range(log_path, start_date, end_date)?;
-    let logs = read_entries_for_date_range(log_path, start_date, end_date)?;
-
-    for entry in logs {
-        let Some(date) = extract_date_from_path(&entry.file_path) else {
-            continue;
-        };
-        let time = parse_entry_time(&entry);
-        let text = entry
-            .content
-            .lines()
-            .next()
-            .map(strip_timestamp_prefix)
-            .unwrap_or("")
-            .trim()
-            .to_string();
-
-        items.push(AgendaItem {
-            kind: AgendaItemKind::Log,
-            date,
-            time,
-            duration_minutes: None,
-            text,
-            indent: 0,
-            is_done: false,
-            priority: None,
-            schedule: crate::models::TaskSchedule::default(),
-            file_path: entry.file_path,
-            line_number: entry.line_number,
-        });
-    }
-
+    items.extend(read_note_entries(log_path, start_date, end_date)?);
     Ok(items)
 }
 
@@ -241,11 +222,75 @@ fn agenda_date_for_task(task: &TaskItem, file_date: NaiveDate) -> NaiveDate {
         .unwrap_or(file_date)
 }
 
-fn parse_entry_time(entry: &LogEntry) -> Option<chrono::NaiveTime> {
-    let first = entry.content.lines().next()?;
-    let (prefix, _) = split_timestamp_line(first)?;
-    let time_str = prefix.trim().trim_start_matches('[').trim_end_matches(']');
-    chrono::NaiveTime::parse_from_str(time_str, "%H:%M:%S").ok()
+fn read_note_entries(
+    log_path: &Path,
+    start_date: NaiveDate,
+    end_date: NaiveDate,
+) -> io::Result<Vec<AgendaItem>> {
+    ensure_log_dir(log_path)?;
+    let mut items = Vec::new();
+    let dates = get_available_log_dates(log_path).unwrap_or_default();
+
+    for date in dates {
+        let date_str = date.format("%Y-%m-%d").to_string();
+        let path = get_file_path_for_date(log_path, &date_str);
+        if !path.exists() {
+            continue;
+        }
+        let content = fs::read_to_string(&path)?;
+        let path_str = path.to_string_lossy().to_string();
+
+        for (idx, line) in content.lines().enumerate() {
+            if line.contains("System: Carryover Checked") {
+                continue;
+            }
+            if parse_task_line(line).is_some() {
+                continue;
+            }
+            if is_timestamped_line(line) {
+                continue;
+            }
+
+            let stripped = strip_timestamp_prefix(line);
+            if stripped.trim().is_empty() {
+                continue;
+            }
+            let (schedule, text) = parse_task_metadata(stripped);
+            if schedule.is_empty() {
+                continue;
+            }
+            if text.trim().is_empty() {
+                continue;
+            }
+
+            let agenda_date = schedule
+                .scheduled
+                .or(schedule.due)
+                .or(schedule.start)
+                .unwrap_or(date);
+            if agenda_date < start_date || agenda_date > end_date {
+                continue;
+            }
+
+            let (_indent_bytes, indent_spaces) = parse_indent(stripped);
+
+            items.push(AgendaItem {
+                kind: AgendaItemKind::Note,
+                date: agenda_date,
+                time: schedule.time,
+                duration_minutes: schedule.duration_minutes,
+                text: text.trim().to_string(),
+                indent: indent_spaces.div_ceil(2),
+                is_done: false,
+                priority: None,
+                schedule,
+                file_path: path_str.clone(),
+                line_number: idx,
+            });
+        }
+    }
+
+    Ok(items)
 }
 
 pub fn search_entries(log_path: &Path, query: &str) -> io::Result<Vec<LogEntry>> {

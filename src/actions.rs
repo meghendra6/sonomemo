@@ -6,8 +6,6 @@ use crate::{
 };
 use chrono::{Duration, Local};
 
-const AGENDA_DAYS_BACK: i64 = 7;
-
 pub fn open_tag_popup(app: &mut App) {
     if let Ok(tags) = storage::get_all_tags(&app.config.data.log_path) {
         app.tags = tags;
@@ -104,28 +102,13 @@ fn next_priority(current: Option<Priority>) -> Option<Priority> {
     }
 }
 
-pub fn open_agenda_popup(app: &mut App) {
-    let today = Local::now().date_naive();
-    let start = today - Duration::days(AGENDA_DAYS_BACK);
-    let end = today;
-    let items = storage::read_agenda_entries(&app.config.data.log_path, start, end)
-        .unwrap_or_default();
-
-    if items.is_empty() {
-        app.toast("No agenda items.");
-        return;
-    }
-
-    app.agenda_all_items = items;
-    app.agenda_selected_day = today;
-    app.agenda_view = models::AgendaView::List;
-    app.agenda_filter = models::TaskFilter::Open;
-    app.apply_agenda_filter(true);
-    app.set_agenda_selected_day(today);
-    app.show_agenda_popup = true;
+pub fn focus_agenda_panel(app: &mut App) {
+    app.refresh_agenda();
+    app.set_navigate_focus(models::NavigateFocus::Agenda);
+    app.set_agenda_selected_day(app.agenda_selected_day);
 }
 
-pub fn jump_to_agenda_item(app: &mut App) {
+pub fn open_agenda_preview(app: &mut App) {
     let Some(selected) = app.agenda_state.selected() else {
         app.toast("No agenda item selected.");
         return;
@@ -135,29 +118,35 @@ pub fn jump_to_agenda_item(app: &mut App) {
         return;
     };
 
-    let target_date = item.date;
-    if let Some(start) = app.loaded_start_date {
-        if target_date < start {
-            app.loaded_start_date = Some(target_date);
-            app.update_logs();
+    match storage::read_entry_containing_line(&item.file_path, item.line_number) {
+        Ok(Some(entry)) => {
+            app.memo_preview_entry = Some(entry);
+            app.memo_preview_scroll = 0;
+            app.show_memo_preview_popup = true;
         }
-    } else {
-        app.loaded_start_date = Some(target_date);
-        app.update_logs();
+        Ok(None) => app.toast("Memo not found."),
+        Err(_) => app.toast("Failed to load memo."),
+    }
+}
+
+pub fn toggle_agenda_task(app: &mut App) {
+    let Some(selected) = app.agenda_state.selected() else {
+        app.toast("No agenda item selected.");
+        return;
+    };
+    let Some(item) = app.agenda_items.get(selected).cloned() else {
+        app.toast("No agenda item selected.");
+        return;
+    };
+    if item.kind != models::AgendaItemKind::Task {
+        app.toast("Not a task.");
+        return;
     }
 
-    let target_path = &item.file_path;
-    let target_line = item.line_number;
-    if let Some(index) = app.logs.iter().position(|entry| {
-        entry.file_path == *target_path
-            && entry.line_number <= target_line
-            && target_line <= entry.end_line
-    }) {
-        app.logs_state.select(Some(index));
-        app.navigate_focus = models::NavigateFocus::Timeline;
-        app.show_agenda_popup = false;
+    if storage::toggle_task_status(&item.file_path, item.line_number).is_ok() {
+        app.update_logs();
     } else {
-        app.toast("Agenda item not found.");
+        app.toast("Failed to toggle task.");
     }
 }
 
@@ -203,7 +192,7 @@ pub fn open_editor_style_switcher(app: &mut App) {
 }
 
 pub fn open_or_toggle_pomodoro_for_selected_task(app: &mut App) {
-    app.navigate_focus = models::NavigateFocus::Tasks;
+    app.set_navigate_focus(models::NavigateFocus::Tasks);
 
     let Some(i) = app.tasks_state.selected() else {
         app.toast("No task selected.");

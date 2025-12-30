@@ -8,7 +8,7 @@ This project was forked from https://github.com/sonohoshi/sonomemo.
 
 - **Timeline**: browse and edit timestamped log entries (multi-line supported)
 - **Tasks**: detect Markdown checkboxes (`- [ ]`, `- [x]`) and toggle them
-- **Agenda view**: see open tasks from recent days in one list
+- **Agenda timeline**: day view with scheduled tasks/notes and an optional unscheduled list
 - **Outlining/folding**: collapse Timeline entries for quick overview
 - **Task priorities**: add `[#A]`, `[#B]`, `[#C]` after the checkbox to mark priority
 - **Pomodoro per task**: start a timer for a selected task; when it completes, MemoLog appends `🍅` to that task line
@@ -94,9 +94,10 @@ Available presets:
 
 All keybindings are configurable in `config.toml`.
 
-- Global: `?` help, `h/l` focus, `i` compose, `/` search, `t` tags, `g` activity, `A` agenda, `T` theme presets, `p` pomodoro, `o` log dir, `Ctrl+Q` quit
-- Timeline: `j/k` move, `Tab` fold entry, `Shift+Tab` cycle overview/contents/show-all, `e` edit entry, `Enter/Space` toggle checkbox
-- Tasks: `j/k` move, `Enter/Space` toggle checkbox, `Shift+P` cycle priority, `p` start/stop pomodoro, `e` edit source entry
+- Global: `?` help, `Ctrl+H/J/K/L` focus move, `a` agenda focus, `i` compose, `/` search, `t` tags, `g` activity, `T` theme presets, `p` pomodoro, `o` log dir, `Ctrl+Q` quit
+- Timeline: `j/k` move, `Tab` fold entry, `Shift+Tab` cycle overview/contents/show-all, `e` edit entry, `Space` toggle checkbox
+- Agenda: `j/k` move, `Enter` preview memo, `Space` toggle task, `h/l` day nav, `PgUp/PgDn` week nav, `f` filter, `u` unscheduled toggle
+- Tasks: `j/k` move, `Space` toggle checkbox, `Shift+P` cycle priority, `p` start/stop pomodoro, `e` edit source entry
 - Composer: `Enter` newline, `Shift+Enter` save, `Ctrl+T` toggle task, `Ctrl+P` cycle priority, `Ctrl+;` date picker, `Tab/Shift+Tab` indent/outdent, `Esc` back
 
 ## Task priorities

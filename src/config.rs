@@ -191,6 +191,7 @@ impl Default for UiConfig {
 pub struct KeyBindings {
     pub global: GlobalBindings,
     pub timeline: TimelineBindings,
+    pub agenda: AgendaBindings,
     pub tasks: TasksBindings,
     pub composer: ComposerBindings,
     pub search: SearchBindings,
@@ -222,15 +223,15 @@ impl Default for GlobalBindings {
         Self {
             quit: vec!["ctrl+q".to_string(), "q".to_string()],
             help: vec!["?".to_string()],
-            focus_timeline: vec!["h".to_string()],
-            focus_tasks: vec!["l".to_string()],
+            focus_timeline: Vec::new(),
+            focus_tasks: Vec::new(),
             focus_composer: vec!["i".to_string()],
             focus_next: vec!["tab".to_string()],
             focus_prev: vec!["backtab".to_string()],
             search: vec!["/".to_string()],
             tags: vec!["t".to_string()],
             activity: vec!["g".to_string()],
-            agenda: vec!["shift+a".to_string()],
+            agenda: vec!["a".to_string(), "shift+a".to_string()],
             log_dir: vec!["o".to_string()],
             pomodoro: vec!["p".to_string()],
             theme_switcher: vec!["shift+t".to_string()],
@@ -267,10 +268,44 @@ impl Default for TimelineBindings {
             bottom: vec!["end".to_string()],
             fold_toggle: vec!["tab".to_string()],
             fold_cycle: vec!["backtab".to_string()],
-            toggle_todo: vec!["enter".to_string(), "space".to_string()],
+            toggle_todo: vec!["space".to_string()],
             open: vec!["enter".to_string()],
             edit: vec!["e".to_string()],
             delete_entry: vec!["x".to_string()],
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(default)]
+pub struct AgendaBindings {
+    pub up: Vec<String>,
+    pub down: Vec<String>,
+    pub open: Vec<String>,
+    pub toggle: Vec<String>,
+    pub filter: Vec<String>,
+    pub prev_day: Vec<String>,
+    pub next_day: Vec<String>,
+    pub prev_week: Vec<String>,
+    pub next_week: Vec<String>,
+    pub today: Vec<String>,
+    pub toggle_unscheduled: Vec<String>,
+}
+
+impl Default for AgendaBindings {
+    fn default() -> Self {
+        Self {
+            up: vec!["k".to_string(), "up".to_string()],
+            down: vec!["j".to_string(), "down".to_string()],
+            open: vec!["enter".to_string()],
+            toggle: vec!["space".to_string()],
+            filter: vec!["f".to_string()],
+            prev_day: vec!["h".to_string(), "left".to_string()],
+            next_day: vec!["l".to_string(), "right".to_string()],
+            prev_week: vec!["pageup".to_string()],
+            next_week: vec!["pagedown".to_string()],
+            today: vec!["g".to_string()],
+            toggle_unscheduled: vec!["u".to_string()],
         }
     }
 }
@@ -296,7 +331,7 @@ impl Default for TasksBindings {
         Self {
             up: vec!["k".to_string(), "up".to_string()],
             down: vec!["j".to_string(), "down".to_string()],
-            toggle: vec!["space".to_string(), "enter".to_string()],
+            toggle: vec!["space".to_string()],
             start_pomodoro: vec!["p".to_string()],
             open: vec!["enter".to_string()],
             edit: vec!["e".to_string()],
@@ -364,12 +399,6 @@ pub struct PopupBindings {
     pub cancel: Vec<String>,
     pub up: Vec<String>,
     pub down: Vec<String>,
-    pub agenda_toggle_view: Vec<String>,
-    pub agenda_prev_day: Vec<String>,
-    pub agenda_next_day: Vec<String>,
-    pub agenda_prev_week: Vec<String>,
-    pub agenda_next_week: Vec<String>,
-    pub agenda_filter: Vec<String>,
 }
 
 impl Default for PopupBindings {
@@ -379,12 +408,6 @@ impl Default for PopupBindings {
             cancel: vec!["esc".to_string(), "n".to_string()],
             up: vec!["k".to_string(), "up".to_string()],
             down: vec!["j".to_string(), "down".to_string()],
-            agenda_toggle_view: vec!["t".to_string()],
-            agenda_prev_day: vec!["h".to_string(), "left".to_string()],
-            agenda_next_day: vec!["l".to_string(), "right".to_string()],
-            agenda_prev_week: vec!["pageup".to_string()],
-            agenda_next_week: vec!["pagedown".to_string()],
-            agenda_filter: vec!["f".to_string()],
         }
     }
 }
@@ -791,7 +814,9 @@ impl Config {
 
         let removed_composer = remove_keybinding(&mut self.keybindings.composer.clear, "ctrl+l");
         let removed_search = remove_keybinding(&mut self.keybindings.search.clear, "ctrl+l");
-        if removed_composer || removed_search {
+        let removed_focus_timeline = remove_keybinding(&mut self.keybindings.global.focus_timeline, "h");
+        let removed_focus_tasks = remove_keybinding(&mut self.keybindings.global.focus_tasks, "l");
+        if removed_composer || removed_search || removed_focus_timeline || removed_focus_tasks {
             changed = true;
         }
 

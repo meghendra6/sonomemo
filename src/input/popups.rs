@@ -1,5 +1,4 @@
 use crate::{
-    actions,
     app::App,
     config::{self, EditorStyle, ThemePreset, config_path, key_match},
     date_input::{parse_duration_input, parse_relative_date_input, parse_time_input},
@@ -30,6 +29,10 @@ pub fn handle_popup_events(app: &mut App, key: KeyEvent) -> bool {
         handle_date_picker_popup(app, key);
         return true;
     }
+    if app.show_memo_preview_popup {
+        handle_memo_preview_popup(app, key);
+        return true;
+    }
 
     if app.show_exit_popup {
         handle_exit_popup(app, key);
@@ -57,10 +60,6 @@ pub fn handle_popup_events(app: &mut App, key: KeyEvent) -> bool {
         handle_tag_popup(app, key);
         return true;
     }
-    if app.show_agenda_popup {
-        handle_agenda_popup(app, key);
-        return true;
-    }
     if app.show_activity_popup {
         // Close on any key press
         app.show_activity_popup = false;
@@ -71,6 +70,42 @@ pub fn handle_popup_events(app: &mut App, key: KeyEvent) -> bool {
         return true;
     }
     false
+}
+
+fn handle_memo_preview_popup(app: &mut App, key: KeyEvent) {
+    if key_match(&key, &app.config.keybindings.popup.cancel) || key.code == KeyCode::Esc {
+        app.show_memo_preview_popup = false;
+        app.memo_preview_entry = None;
+        return;
+    }
+
+    if let KeyCode::Char('e') | KeyCode::Char('E') = key.code {
+        if let Some(entry) = app.memo_preview_entry.clone() {
+            app.show_memo_preview_popup = false;
+            app.memo_preview_entry = None;
+            app.start_edit_entry(&entry);
+        }
+        return;
+    }
+
+    if key_match(&key, &app.config.keybindings.popup.up) {
+        app.memo_preview_scroll = app.memo_preview_scroll.saturating_sub(1);
+        return;
+    }
+    if key_match(&key, &app.config.keybindings.popup.down) {
+        app.memo_preview_scroll = app.memo_preview_scroll.saturating_add(1);
+        return;
+    }
+
+    match key.code {
+        KeyCode::PageUp => {
+            app.memo_preview_scroll = app.memo_preview_scroll.saturating_sub(5);
+        }
+        KeyCode::PageDown => {
+            app.memo_preview_scroll = app.memo_preview_scroll.saturating_add(5);
+        }
+        _ => {}
+    }
 }
 
 fn handle_date_picker_popup(app: &mut App, key: KeyEvent) {
@@ -196,23 +231,66 @@ fn handle_date_picker_relative_input(app: &mut App, key: KeyEvent) {
 
 fn apply_date_picker_field(app: &mut App) {
     let field = app.date_picker_field;
-    let key = match field {
-        DatePickerField::Scheduled => crate::task_metadata::TaskMetadataKey::Scheduled,
-        DatePickerField::Due => crate::task_metadata::TaskMetadataKey::Due,
-        DatePickerField::Start => crate::task_metadata::TaskMetadataKey::Start,
-        DatePickerField::Time => crate::task_metadata::TaskMetadataKey::Time,
-        DatePickerField::Duration => crate::task_metadata::TaskMetadataKey::Duration,
-    };
+    let schedule = app.date_picker_schedule.clone();
+    let scheduled_value = schedule.scheduled.or_else(|| {
+        (field == DatePickerField::Scheduled)
+            .then(|| app.date_picker_effective_date(DatePickerField::Scheduled))
+    });
+    let due_value = schedule.due.or_else(|| {
+        (field == DatePickerField::Due).then(|| app.date_picker_effective_date(DatePickerField::Due))
+    });
+    let start_value = schedule.start.or_else(|| {
+        (field == DatePickerField::Start).then(|| app.date_picker_effective_date(DatePickerField::Start))
+    });
+    let time_value = schedule
+        .time
+        .or_else(|| (field == DatePickerField::Time).then(|| app.date_picker_effective_time()));
+    let duration_value = schedule.duration_minutes.or_else(|| {
+        (field == DatePickerField::Duration).then(|| app.date_picker_effective_duration())
+    });
 
-    let value = match field {
-        DatePickerField::Scheduled => app.date_picker_effective_date(field).format("%Y-%m-%d").to_string(),
-        DatePickerField::Due => app.date_picker_effective_date(field).format("%Y-%m-%d").to_string(),
-        DatePickerField::Start => app.date_picker_effective_date(field).format("%Y-%m-%d").to_string(),
-        DatePickerField::Time => format_time_value(app.date_picker_effective_time()),
-        DatePickerField::Duration => format_duration_value(app.date_picker_effective_duration()),
-    };
+    let mut updated = false;
+    if let Some(date) = scheduled_value {
+        let value = date.format("%Y-%m-%d").to_string();
+        updated |= markdown::upsert_task_metadata(
+            &mut app.textarea,
+            crate::task_metadata::TaskMetadataKey::Scheduled,
+            &value,
+        );
+    }
+    if let Some(date) = due_value {
+        let value = date.format("%Y-%m-%d").to_string();
+        updated |= markdown::upsert_task_metadata(
+            &mut app.textarea,
+            crate::task_metadata::TaskMetadataKey::Due,
+            &value,
+        );
+    }
+    if let Some(date) = start_value {
+        let value = date.format("%Y-%m-%d").to_string();
+        updated |= markdown::upsert_task_metadata(
+            &mut app.textarea,
+            crate::task_metadata::TaskMetadataKey::Start,
+            &value,
+        );
+    }
+    if let Some(time) = time_value {
+        let value = format_time_value(time);
+        updated |= markdown::upsert_task_metadata(
+            &mut app.textarea,
+            crate::task_metadata::TaskMetadataKey::Time,
+            &value,
+        );
+    }
+    if let Some(minutes) = duration_value {
+        let value = format_duration_value(minutes);
+        updated |= markdown::upsert_task_metadata(
+            &mut app.textarea,
+            crate::task_metadata::TaskMetadataKey::Duration,
+            &value,
+        );
+    }
 
-    let updated = markdown::upsert_task_metadata(&mut app.textarea, key, &value);
     if updated {
         app.mark_insert_modified();
         app.composer_dirty = true;
@@ -309,48 +387,6 @@ enum DatePickerValue {
     Date(chrono::NaiveDate),
     Time(NaiveTime),
     Duration(u32),
-}
-
-fn handle_agenda_popup(app: &mut App, key: KeyEvent) {
-    if key_match(&key, &app.config.keybindings.popup.up) {
-        agenda_move_selection(app, -1);
-    } else if key_match(&key, &app.config.keybindings.popup.down) {
-        agenda_move_selection(app, 1);
-    } else if key_match(&key, &app.config.keybindings.popup.confirm) {
-        actions::jump_to_agenda_item(app);
-    } else if key_match(&key, &app.config.keybindings.popup.agenda_toggle_view) {
-        app.toggle_agenda_view();
-        app.set_agenda_selected_day(app.agenda_selected_day);
-    } else if key_match(&key, &app.config.keybindings.popup.agenda_prev_day) {
-        app.set_agenda_selected_day(app.agenda_selected_day - Duration::days(1));
-    } else if key_match(&key, &app.config.keybindings.popup.agenda_next_day) {
-        app.set_agenda_selected_day(app.agenda_selected_day + Duration::days(1));
-    } else if key_match(&key, &app.config.keybindings.popup.agenda_prev_week) {
-        app.set_agenda_selected_day(app.agenda_selected_day - Duration::days(7));
-    } else if key_match(&key, &app.config.keybindings.popup.agenda_next_week) {
-        app.set_agenda_selected_day(app.agenda_selected_day + Duration::days(7));
-    } else if key_match(&key, &app.config.keybindings.popup.agenda_filter) {
-        app.cycle_agenda_filter();
-        app.set_agenda_selected_day(app.agenda_selected_day);
-    } else if key_match(&key, &app.config.keybindings.popup.cancel) || key.code == KeyCode::Esc {
-        app.show_agenda_popup = false;
-    }
-}
-
-fn agenda_move_selection(app: &mut App, delta: i32) {
-    let visible = app.agenda_visible_indices();
-    if visible.is_empty() {
-        app.agenda_state.select(None);
-        return;
-    }
-
-    let current = app.agenda_state.selected();
-    let pos = current
-        .and_then(|idx| visible.iter().position(|i| *i == idx))
-        .unwrap_or(0);
-    let len = visible.len() as i32;
-    let next = (pos as i32 + delta).rem_euclid(len) as usize;
-    app.agenda_state.select(Some(visible[next]));
 }
 
 fn handle_exit_popup(app: &mut App, key: KeyEvent) {
