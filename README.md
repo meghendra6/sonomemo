@@ -168,9 +168,9 @@ You can also open the active config directly inside MemoLog:
 - Edit and save with `Shift+Enter`.
 - Restart MemoLog to apply changes.
 
-### Google sync (Calendar + Tasks)
+### Google sync (Calendar + Tasks, experimental)
 
-MemoLog can sync tasks and scheduled notes with Google Tasks + Calendar (two-way).
+MemoLog can sync tasks and scheduled notes with Google Tasks + Calendar (two-way). Experimental.
 This uses a local browser redirect (temporary localhost listener) and stores tokens locally.
 
 1) Prepare Google Cloud
@@ -276,7 +276,7 @@ Global
 - `T` theme presets
 - `p` pomodoro
 - `o` log dir
-- `Ctrl+G` google sync
+- `Ctrl+G` google sync (experimental)
 - `Ctrl+Q` quit
 
 Timeline
