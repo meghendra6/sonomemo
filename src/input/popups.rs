@@ -11,6 +11,10 @@ use chrono::{Duration, Local, NaiveTime, Timelike};
 use crossterm::event::{KeyCode, KeyEvent};
 
 pub fn handle_popup_events(app: &mut App, key: KeyEvent) -> bool {
+    if app.show_google_auth_popup {
+        handle_google_auth_popup(app, key);
+        return true;
+    }
     if app.show_theme_popup {
         handle_theme_switcher_popup(app, key);
         return true;
@@ -705,5 +709,21 @@ fn handle_path_popup(app: &mut App, key: KeyEvent) {
     } else if key_match(&key, &app.config.keybindings.popup.cancel) {
         app.show_path_popup = false;
         app.transition_to(InputMode::Navigate);
+    }
+}
+
+fn handle_google_auth_popup(app: &mut App, key: KeyEvent) {
+    if key_match(&key, &app.config.keybindings.popup.confirm) {
+        if let Some(display) = app.google_auth_display.as_ref() {
+            if let Err(e) = open::that(&display.verification_url) {
+                eprintln!("Failed to open browser: {}", e);
+            }
+        }
+        return;
+    }
+
+    if key_match(&key, &app.config.keybindings.popup.cancel) || key.code == KeyCode::Esc {
+        app.show_google_auth_popup = false;
+        return;
     }
 }

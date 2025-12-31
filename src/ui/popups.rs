@@ -692,6 +692,89 @@ pub fn render_path_popup(f: &mut Frame, app: &App) {
     f.render_widget(help_text, text_area[1]);
 }
 
+pub fn render_google_auth_popup(f: &mut Frame, app: &App) {
+    let tokens = ThemeTokens::from_theme(&app.config.theme);
+    let block = Block::default()
+        .title(" Google Sync ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(tokens.ui_border_default));
+    let area = centered_rect(70, 40, f.area());
+    f.render_widget(Clear, area);
+    f.render_widget(block, area);
+
+    let text_area = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(100)])
+        .margin(2)
+        .split(area);
+
+    let mut lines = Vec::new();
+    lines.push(Line::from(Span::styled(
+        "Connect your Google account",
+        Style::default()
+            .fg(tokens.ui_accent)
+            .add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(""));
+
+    if let Some(display) = app.google_auth_display.as_ref() {
+        let remaining = display.expires_at.signed_duration_since(Local::now());
+        let remaining_seconds = remaining.num_seconds().max(0);
+        let remaining_text = if remaining_seconds > 0 {
+            format!(
+                "Expires in {:02}m {:02}s",
+                remaining_seconds / 60,
+                remaining_seconds % 60
+            )
+        } else {
+            "Code expired. Press Esc and try again.".to_string()
+        };
+
+        lines.push(Line::from(Span::raw(
+            "Open this URL and enter the code:",
+        )));
+        lines.push(Line::from(Span::styled(
+            display.verification_url.as_str(),
+            Style::default()
+                .fg(tokens.ui_accent)
+                .add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled("Code: ", Style::default().fg(tokens.ui_muted)),
+            Span::styled(
+                display.user_code.as_str(),
+                Style::default()
+                    .fg(tokens.ui_accent)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]));
+        lines.push(Line::from(Span::styled(
+            remaining_text,
+            Style::default().fg(tokens.ui_muted),
+        )));
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "Waiting for authorization…",
+            Style::default().fg(tokens.ui_muted),
+        )));
+    } else {
+        lines.push(Line::from(Span::styled(
+            "Starting Google authorization…",
+            Style::default().fg(tokens.ui_muted),
+        )));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "[Enter] Open browser    [Esc] Close",
+        Style::default().fg(tokens.ui_muted),
+    )));
+
+    let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: true });
+    f.render_widget(paragraph, text_area[0]);
+}
+
 pub fn render_help_popup(f: &mut Frame, app: &App) {
     let tokens = ThemeTokens::from_theme(&app.config.theme);
     if app.input_mode == InputMode::Editing
@@ -726,6 +809,7 @@ pub fn render_help_popup(f: &mut Frame, app: &App) {
                 ("Log dir", fmt_keys(&kb.global.log_dir)),
                 ("Theme presets", fmt_keys(&kb.global.theme_switcher)),
                 ("Editor style", fmt_keys(&kb.global.editor_style_switcher)),
+                ("Google sync", fmt_keys(&kb.global.sync_google)),
                 ("Quit", fmt_keys(&kb.global.quit)),
             ],
         ),

@@ -1,8 +1,10 @@
-use crate::{app::App, models, storage};
+use crate::{actions, app::App, integrations::google, models, storage};
 use chrono::{Duration, Local};
+use std::sync::mpsc::TryRecvError;
 
 pub fn tick(app: &mut App) {
     handle_day_rollover(app);
+    handle_google_auth(app);
 
     if let Some(end_time) = app.pomodoro_end
         && Local::now() >= end_time
@@ -46,6 +48,38 @@ pub fn tick(app: &mut App) {
         && Local::now() >= expiry
     {
         app.clear_visual_hint();
+    }
+}
+
+fn handle_google_auth(app: &mut App) {
+    let result = {
+        let Some(receiver) = app.google_auth_receiver.as_ref() else {
+            return;
+        };
+        receiver.try_recv()
+    };
+
+    match result {
+        Ok(google::AuthPollResult::Success) => {
+            app.google_auth_receiver = None;
+            app.show_google_auth_popup = false;
+            app.google_auth_display = None;
+            app.toast("Google auth complete. Syncing now...");
+            actions::sync_google(app);
+        }
+        Ok(google::AuthPollResult::Error(message)) => {
+            app.google_auth_receiver = None;
+            app.show_google_auth_popup = false;
+            app.google_auth_display = None;
+            app.toast(format!("Google auth failed: {message}"));
+        }
+        Err(TryRecvError::Empty) => {}
+        Err(TryRecvError::Disconnected) => {
+            app.google_auth_receiver = None;
+            app.show_google_auth_popup = false;
+            app.google_auth_display = None;
+            app.toast("Google auth stopped.");
+        }
     }
 }
 

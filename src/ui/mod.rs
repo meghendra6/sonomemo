@@ -30,9 +30,9 @@ pub mod theme;
 use components::{centered_column, markdown_prefix_width, parse_markdown_spans, wrap_markdown_line};
 use popups::{
     render_activity_popup, render_date_picker_popup, render_delete_entry_popup,
-    render_editor_style_popup, render_exit_popup, render_help_popup, render_memo_preview_popup,
-    render_mood_popup, render_path_popup, render_pomodoro_popup, render_siren_popup,
-    render_tag_popup, render_theme_switcher_popup, render_todo_popup,
+    render_editor_style_popup, render_exit_popup, render_google_auth_popup, render_help_popup,
+    render_memo_preview_popup, render_mood_popup, render_path_popup, render_pomodoro_popup,
+    render_siren_popup, render_tag_popup, render_theme_switcher_popup, render_todo_popup,
 };
 
 pub fn ui(f: &mut Frame, app: &mut App) {
@@ -1032,6 +1032,9 @@ pub fn ui(f: &mut Frame, app: &mut App) {
 
     if app.show_help_popup {
         render_help_popup(f, app);
+    }
+    if app.show_google_auth_popup {
+        render_google_auth_popup(f, app);
     }
     if app.show_theme_popup {
         render_theme_switcher_popup(f, app);

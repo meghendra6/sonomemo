@@ -19,6 +19,7 @@ mod app;
 mod config;
 mod date_input;
 mod editor;
+mod integrations;
 mod input;
 mod models;
 mod runtime;

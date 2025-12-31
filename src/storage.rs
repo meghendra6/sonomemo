@@ -1,8 +1,11 @@
 use crate::models::{
-    AgendaItem, AgendaItemKind, Priority, LogEntry, TaskItem, count_trailing_tomatoes,
+    AgendaItem, AgendaItemKind, Priority, LogEntry, TaskItem, TaskSchedule,
+    count_trailing_tomatoes,
     is_timestamped_line, strip_timestamp_prefix, strip_trailing_tomatoes,
 };
-use crate::task_metadata::{parse_task_metadata, strip_task_metadata_tokens};
+use crate::task_metadata::{
+    TaskMetadataKey, parse_task_metadata, strip_task_metadata_tokens, upsert_task_metadata_token,
+};
 use chrono::{Duration, Local, NaiveDate};
 use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
@@ -31,8 +34,18 @@ fn get_file_path_for_date(log_path: &Path, date: &str) -> PathBuf {
 }
 
 pub fn append_entry(log_path: &Path, content: &str) -> io::Result<()> {
+    let today = Local::now().date_naive();
+    append_entry_to_date(log_path, today, content)
+}
+
+pub fn append_entry_to_date(
+    log_path: &Path,
+    date: NaiveDate,
+    content: &str,
+) -> io::Result<()> {
     ensure_log_dir(log_path)?;
-    let path = get_today_file_path(log_path);
+    let date_str = date.format("%Y-%m-%d").to_string();
+    let path = get_file_path_for_date(log_path, &date_str);
 
     let time = Local::now().format("%H:%M:%S").to_string();
     let entry_body = content.trim_end_matches('\n');
@@ -552,6 +565,97 @@ fn parse_task_line(line: &str) -> Option<ParsedTaskLine> {
     })
 }
 
+fn format_task_body(update: &TaskLineUpdate) -> String {
+    let checkbox = if update.is_done { "- [x] " } else { "- [ ] " };
+    let mut body = String::new();
+    body.push_str(checkbox);
+    if let Some(priority) = update.priority {
+        body.push_str(&format!("[#{}] ", priority.as_char()));
+    }
+    body.push_str(update.text.trim());
+    apply_schedule_tokens(&body, &update.schedule)
+}
+
+fn apply_schedule_tokens(text: &str, schedule: &TaskSchedule) -> String {
+    let mut output = text.trim_end().to_string();
+    let sched = schedule
+        .scheduled
+        .map(|d| d.format("%Y-%m-%d").to_string())
+        .unwrap_or_default();
+    output = upsert_task_metadata_token(&output, TaskMetadataKey::Scheduled, &sched);
+    let due = schedule
+        .due
+        .map(|d| d.format("%Y-%m-%d").to_string())
+        .unwrap_or_default();
+    output = upsert_task_metadata_token(&output, TaskMetadataKey::Due, &due);
+    let start = schedule
+        .start
+        .map(|d| d.format("%Y-%m-%d").to_string())
+        .unwrap_or_default();
+    output = upsert_task_metadata_token(&output, TaskMetadataKey::Start, &start);
+    let time = schedule
+        .time
+        .map(|t| t.format("%H:%M").to_string())
+        .unwrap_or_default();
+    output = upsert_task_metadata_token(&output, TaskMetadataKey::Time, &time);
+    let duration = schedule
+        .duration_minutes
+        .map(|m| m.to_string())
+        .unwrap_or_default();
+    output = upsert_task_metadata_token(&output, TaskMetadataKey::Duration, &duration);
+    output
+}
+
+fn extract_carryover_marker(text: &str) -> Option<String> {
+    let trimmed = text.trim_end();
+    let open = '⟦';
+    let close = '⟧';
+    let Some(start) = trimmed.rfind(open) else {
+        return None;
+    };
+    let Some(close_offset) = trimmed[start..].find(close) else {
+        return None;
+    };
+    let close_index = start + close_offset;
+    let close_len = close.len_utf8();
+    if close_index + close_len != trimmed.len() {
+        return None;
+    }
+
+    let date = &trimmed[start + open.len_utf8()..close_index];
+    if NaiveDate::parse_from_str(date, "%Y-%m-%d").is_err() {
+        return None;
+    }
+
+    Some(date.to_string())
+}
+
+fn split_note_prefix(text: &str) -> (String, &str) {
+    if let Some(rest) = text.strip_prefix("- ") {
+        return ("- ".to_string(), rest);
+    }
+    if let Some(rest) = text.strip_prefix("* ") {
+        return ("* ".to_string(), rest);
+    }
+    if let Some(rest) = text.strip_prefix("+ ") {
+        return ("+ ".to_string(), rest);
+    }
+    let bytes = text.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        i += 1;
+    }
+    if i > 0 && i + 1 < bytes.len() {
+        let punct = bytes[i];
+        if (punct == b'.' || punct == b')') && bytes[i + 1] == b' ' {
+            let prefix = text[..i + 2].to_string();
+            let rest = &text[i + 2..];
+            return (prefix, rest);
+        }
+    }
+    (String::new(), text)
+}
+
 fn mark_task_completed_line(line: &str) -> Option<String> {
     if line.contains("- [ ]") {
         Some(line.replacen("- [ ]", "- [x]", 1))
@@ -618,6 +722,107 @@ pub fn toggle_task_status(file_path: &str, line_number: usize) -> io::Result<()>
     file.write_all(new_content.as_bytes())?;
 
     Ok(())
+}
+
+pub struct TaskLineUpdate {
+    pub text: String,
+    pub is_done: bool,
+    pub priority: Option<Priority>,
+    pub schedule: TaskSchedule,
+}
+
+pub struct NoteLineUpdate {
+    pub text: String,
+    pub schedule: TaskSchedule,
+}
+
+pub fn update_task_line(
+    file_path: &str,
+    line_number: usize,
+    update: TaskLineUpdate,
+) -> io::Result<bool> {
+    let content = fs::read_to_string(file_path)?;
+    let mut lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
+
+    if line_number >= lines.len() {
+        return Ok(false);
+    }
+
+    let line = lines[line_number].clone();
+    let stripped = strip_timestamp_prefix(&line);
+    let prefix_len = line.len().saturating_sub(stripped.len());
+    let (indent_bytes, _) = parse_indent(stripped);
+    let prefix = &line[..prefix_len.saturating_add(indent_bytes)];
+
+    let (without_tomatoes, tomato_count) = strip_trailing_tomatoes(stripped);
+    let carryover = extract_carryover_marker(without_tomatoes);
+
+    let mut body = format_task_body(&update);
+    if let Some(carryover) = carryover {
+        body.push_str(&format!(" ⟦{carryover}⟧"));
+    }
+    if tomato_count > 0 {
+        body.push(' ');
+        body.push_str(&"🍅".repeat(tomato_count));
+    }
+
+    lines[line_number] = format!("{prefix}{body}");
+
+    let mut new_content = lines.join("\n");
+    if !new_content.ends_with('\n') {
+        new_content.push('\n');
+    }
+    let mut file = fs::File::create(file_path)?;
+    file.write_all(new_content.as_bytes())?;
+
+    Ok(true)
+}
+
+pub fn update_note_line(
+    file_path: &str,
+    line_number: usize,
+    update: NoteLineUpdate,
+) -> io::Result<bool> {
+    let content = fs::read_to_string(file_path)?;
+    let mut lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
+
+    if line_number >= lines.len() {
+        return Ok(false);
+    }
+
+    let line = lines[line_number].clone();
+    let stripped = strip_timestamp_prefix(&line);
+    let prefix_len = line.len().saturating_sub(stripped.len());
+    let (indent_bytes, _) = parse_indent(stripped);
+    let indent = &stripped[..indent_bytes];
+    let rest = &stripped[indent_bytes..];
+    let (list_prefix, _) = split_note_prefix(rest);
+
+    let mut body = String::new();
+    body.push_str(update.text.trim());
+    body = apply_schedule_tokens(&body, &update.schedule);
+
+    let prefix = format!("{}{}{}", &line[..prefix_len], indent, list_prefix);
+    lines[line_number] = format!("{prefix}{body}");
+
+    let mut new_content = lines.join("\n");
+    if !new_content.ends_with('\n') {
+        new_content.push('\n');
+    }
+    let mut file = fs::File::create(file_path)?;
+    file.write_all(new_content.as_bytes())?;
+
+    Ok(true)
+}
+
+pub fn compose_task_line(update: &TaskLineUpdate) -> String {
+    format_task_body(update)
+}
+
+pub fn compose_note_line(update: &NoteLineUpdate) -> String {
+    let mut body = update.text.trim().to_string();
+    body = apply_schedule_tokens(&body, &update.schedule);
+    body
 }
 
 /// Cycles task priority marker (None -> A -> B -> C -> None) at the given line.

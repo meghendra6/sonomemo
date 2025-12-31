@@ -1,6 +1,7 @@
 use crate::{
     app::App,
-    config::{EditorStyle, ThemePreset},
+    config::{EditorStyle, ThemePreset, google_token_path},
+    integrations::google,
     models::{self, Priority},
     storage,
 };
@@ -90,6 +91,36 @@ pub fn open_activity_popup(app: &mut App) {
     if let Ok(data) = storage::get_activity_stats(&app.config.data.log_path) {
         app.activity_data = data;
         app.show_activity_popup = true;
+    }
+}
+
+pub fn sync_google(app: &mut App) {
+    if app.google_auth_receiver.is_some() {
+        app.show_google_auth_popup = true;
+        app.toast("Google auth in progress.");
+        return;
+    }
+
+    match google::sync(&app.config) {
+        Ok(report) => {
+            app.google_auth_display = None;
+            app.update_logs();
+            app.toast(format!("Google sync complete: {}", report.summary()));
+        }
+        Err(google::SyncError::AuthRequired(session)) => {
+            let token_path = google_token_path(&app.config);
+            app.google_auth_display = Some(session.display.clone());
+            app.show_google_auth_popup = true;
+            app.google_auth_receiver = Some(google::spawn_device_flow_poll(
+                app.config.google.clone(),
+                session,
+                token_path,
+            ));
+            app.toast("Google auth required. Follow the popup instructions.");
+        }
+        Err(err) => {
+            app.toast(err.message());
+        }
     }
 }
 

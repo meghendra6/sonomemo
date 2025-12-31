@@ -129,6 +129,30 @@ pub fn config_path() -> PathBuf {
         .join(".memolog-config.toml")
 }
 
+pub fn google_token_path(config: &Config) -> PathBuf {
+    if let Some(path) = config.google.token_path.as_ref() {
+        return path.clone();
+    }
+    if let Some(dirs) = project_dirs() {
+        return dirs.config_dir().join("google_token.json");
+    }
+    std::env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join("google_token.json")
+}
+
+pub fn google_sync_state_path(config: &Config) -> PathBuf {
+    if let Some(path) = config.google.sync_state_path.as_ref() {
+        return path.clone();
+    }
+    if let Some(dirs) = project_dirs() {
+        return dirs.config_dir().join("google_sync_state.json");
+    }
+    std::env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join("google_sync_state.json")
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 #[serde(default)]
 pub struct Config {
@@ -138,6 +162,7 @@ pub struct Config {
     pub editor: EditorConfig,
     pub data: DataConfig,
     pub pomodoro: PomodoroConfig,
+    pub google: GoogleConfig,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -150,6 +175,40 @@ impl Default for DataConfig {
     fn default() -> Self {
         Self {
             log_path: default_log_dir(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(default)]
+pub struct GoogleConfig {
+    pub enabled: bool,
+    pub client_id: String,
+    pub client_secret: String,
+    pub calendar_id: String,
+    pub tasks_list_id: String,
+    pub sync_tasks_to_calendar: bool,
+    pub sync_past_days: i64,
+    pub sync_future_days: i64,
+    pub conflict_policy: String,
+    pub token_path: Option<PathBuf>,
+    pub sync_state_path: Option<PathBuf>,
+}
+
+impl Default for GoogleConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            client_id: String::new(),
+            client_secret: String::new(),
+            calendar_id: "primary".to_string(),
+            tasks_list_id: "@default".to_string(),
+            sync_tasks_to_calendar: true,
+            sync_past_days: 30,
+            sync_future_days: 365,
+            conflict_policy: "prefer_local".to_string(),
+            token_path: None,
+            sync_state_path: None,
         }
     }
 }
@@ -214,6 +273,7 @@ pub struct GlobalBindings {
     pub agenda: Vec<String>,
     pub log_dir: Vec<String>,
     pub pomodoro: Vec<String>,
+    pub sync_google: Vec<String>,
     pub theme_switcher: Vec<String>,
     pub editor_style_switcher: Vec<String>,
 }
@@ -234,6 +294,7 @@ impl Default for GlobalBindings {
             agenda: vec!["a".to_string(), "shift+a".to_string()],
             log_dir: vec!["o".to_string()],
             pomodoro: vec!["p".to_string()],
+            sync_google: vec!["ctrl+g".to_string()],
             theme_switcher: vec!["shift+t".to_string()],
             editor_style_switcher: vec!["shift+v".to_string()],
         }

@@ -1,4 +1,5 @@
 use crate::config::{Config, Theme};
+use crate::integrations::google::{AuthPollResult, DeviceAuthDisplay};
 use crate::models::{
     DatePickerField, EditorMode, EntryIdentity, FoldOverride, FoldState, InputMode, LogEntry,
     NavigateFocus, PomodoroTarget, Priority, TaskFilter, TaskItem, TaskSchedule,
@@ -9,6 +10,7 @@ use chrono::{DateTime, Duration, Local, NaiveDate, NaiveTime, Timelike};
 use ratatui::widgets::ListState;
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::mpsc::Receiver;
 use tui_textarea::CursorMove;
 use tui_textarea::TextArea;
 
@@ -133,6 +135,9 @@ pub struct App<'a> {
     pub show_memo_preview_popup: bool,
     pub memo_preview_entry: Option<LogEntry>,
     pub memo_preview_scroll: usize,
+    pub show_google_auth_popup: bool,
+    pub google_auth_display: Option<DeviceAuthDisplay>,
+    pub google_auth_receiver: Option<Receiver<AuthPollResult>>,
 
     // Pomodoro completion alert (blocks input until expiry)
     pub pomodoro_alert_expiry: Option<DateTime<Local>>,
@@ -308,6 +313,9 @@ impl<'a> App<'a> {
             show_memo_preview_popup: false,
             memo_preview_entry: None,
             memo_preview_scroll: 0,
+            show_google_auth_popup: false,
+            google_auth_display: None,
+            google_auth_receiver: None,
             pomodoro_alert_expiry: None,
             pomodoro_alert_message: None,
             toast_message: None,
