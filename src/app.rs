@@ -139,6 +139,7 @@ pub struct App<'a> {
     pub show_google_auth_popup: bool,
     pub google_auth_display: Option<AuthDisplay>,
     pub google_auth_receiver: Option<Receiver<AuthPollResult>>,
+    pub google_sync_receiver: Option<Receiver<crate::integrations::google::SyncOutcome>>,
 
     // Pomodoro completion alert (blocks input until expiry)
     pub pomodoro_alert_expiry: Option<DateTime<Local>>,
@@ -317,6 +318,7 @@ impl<'a> App<'a> {
             show_google_auth_popup: false,
             google_auth_display: None,
             google_auth_receiver: None,
+            google_sync_receiver: None,
             pomodoro_alert_expiry: None,
             pomodoro_alert_message: None,
             toast_message: None,

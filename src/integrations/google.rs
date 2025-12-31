@@ -70,6 +70,12 @@ pub enum AuthPollResult {
     Error(String),
 }
 
+pub enum SyncOutcome {
+    Success(SyncReport),
+    AuthRequired(AuthSession),
+    Error(String),
+}
+
 #[derive(Default, Debug)]
 pub struct SyncReport {
     pub tasks_created: usize,
@@ -179,6 +185,19 @@ struct EventUpdateRequest {
     summary: String,
     start: EventDateTime,
     end: EventDateTime,
+}
+
+pub fn spawn_sync(config: Config) -> Receiver<SyncOutcome> {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let outcome = match sync(&config) {
+            Ok(report) => SyncOutcome::Success(report),
+            Err(SyncError::AuthRequired(session)) => SyncOutcome::AuthRequired(session),
+            Err(err) => SyncOutcome::Error(err.message()),
+        };
+        let _ = tx.send(outcome);
+    });
+    rx
 }
 
 pub fn sync(config: &Config) -> Result<SyncReport, SyncError> {
