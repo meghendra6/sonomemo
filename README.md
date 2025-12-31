@@ -163,6 +163,64 @@ Environment variables:
 
 The repository root includes a small `config.toml` you can copy and edit.
 
+### Google sync (Calendar + Tasks)
+
+MemoLog can sync tasks and scheduled notes with Google Tasks + Calendar (two-way).
+This uses OAuth device flow and stores tokens locally.
+
+1) Prepare Google Cloud
+- Create a Google Cloud project
+- Enable APIs: "Google Calendar API" and "Google Tasks API"
+- Create OAuth credentials for a Desktop app
+- Copy the client ID and client secret
+
+2) Configure `config.toml`
+
+```toml
+[google]
+enabled = true
+client_id = "YOUR_CLIENT_ID.apps.googleusercontent.com"
+client_secret = "YOUR_CLIENT_SECRET"
+calendar_id = "primary"
+tasks_list_id = "@default"
+sync_tasks_to_calendar = true
+sync_past_days = 30
+sync_future_days = 365
+conflict_policy = "prefer_local"
+# token_path = "/path/to/google_token.json"
+# sync_state_path = "/path/to/google_sync_state.json"
+```
+
+Notes:
+- `calendar_id`: use `"primary"` for your main calendar, or a specific calendar ID.
+- `tasks_list_id`: `"@default"` is your default list. To use another list, fetch its ID from the Tasks API.
+- `token_path` and `sync_state_path` are optional overrides. By default they live in your OS config directory.
+
+3) Authorize and sync
+- Launch MemoLog
+- Press `Ctrl+G`
+- Open the URL shown in the popup, enter the code, and approve access
+
+What syncs
+- Tasks: Markdown checkboxes are synced to Google Tasks.
+  - `@due`/`@sched`/`@start` are mapped to task due date/time.
+  - Completion state is synced.
+- Calendar events:
+  - Notes with schedule metadata (`@sched`, `@start`, `@due`, `@time`, `@dur`) sync as events.
+  - If `sync_tasks_to_calendar = true`, tasks also sync as events.
+    Tasks without schedule metadata become all-day events on the log date.
+
+Conflict policy
+- `prefer_local`: local edits win when both sides changed since last sync.
+- `prefer_remote`: Google edits win in the same case.
+
+Sync range
+- `sync_past_days` and `sync_future_days` limit the calendar sync window.
+- Tasks are pulled from the entire Google Tasks list and merged with local items in the date range.
+
+Limitations
+- Deletions are not synced. Removing items in Google may cause them to be re-created from local data.
+
 ### Theme
 
 You can customize UI colors by adding a `[theme]` section to `config.toml`.
@@ -212,6 +270,7 @@ Global
 - `T` theme presets
 - `p` pomodoro
 - `o` log dir
+- `Ctrl+G` google sync
 - `Ctrl+Q` quit
 
 Timeline
