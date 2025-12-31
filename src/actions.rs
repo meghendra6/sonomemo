@@ -112,7 +112,7 @@ pub fn sync_google(app: &mut App) {
             let token_path = google_token_path(&app.config);
             app.google_auth_display = Some(session.display.clone());
             app.show_google_auth_popup = true;
-            app.google_auth_receiver = Some(google::spawn_device_flow_poll(
+            app.google_auth_receiver = Some(google::spawn_auth_flow_poll(
                 app.config.google.clone(),
                 session,
                 token_path,

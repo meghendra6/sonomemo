@@ -3,15 +3,18 @@ use crate::models::{AgendaItem, AgendaItemKind, TaskSchedule};
 use crate::storage::{self, NoteLineUpdate, TaskLineUpdate};
 use chrono::{DateTime, Duration, Local, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 use reqwest::blocking::Client;
+use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::io;
+use std::io::{self, Read, Write};
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
+use std::time::Duration as StdDuration;
 
-const OAUTH_DEVICE_URL: &str = "https://oauth2.googleapis.com/device/code";
+const OAUTH_AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const OAUTH_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const CALENDAR_API: &str = "https://www.googleapis.com/calendar/v3";
 const TASKS_API: &str = "https://tasks.googleapis.com/tasks/v1";
@@ -19,7 +22,7 @@ const DEFAULT_EVENT_DURATION_MINUTES: i64 = 60;
 
 #[derive(Debug)]
 pub enum SyncError {
-    AuthRequired(DeviceAuthSession),
+    AuthRequired(AuthSession),
     Config(String),
     Request(String),
     Io(String),
@@ -45,17 +48,18 @@ impl From<io::Error> for SyncError {
 }
 
 #[derive(Clone, Debug)]
-pub struct DeviceAuthDisplay {
-    pub user_code: String,
-    pub verification_url: String,
+pub struct AuthDisplay {
+    pub auth_url: String,
+    pub listen_addr: String,
     pub expires_at: DateTime<Local>,
 }
 
-#[derive(Clone, Debug)]
-pub struct DeviceAuthSession {
-    pub display: DeviceAuthDisplay,
-    device_code: String,
-    interval: u64,
+#[derive(Debug)]
+pub struct AuthSession {
+    pub display: AuthDisplay,
+    listener: TcpListener,
+    state: String,
+    redirect_uri: String,
     expires_at: DateTime<Local>,
 }
 
@@ -109,15 +113,6 @@ struct SyncItem {
     google_id: String,
     hash: String,
     remote_updated: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct DeviceCodeResponse {
-    device_code: String,
-    user_code: String,
-    verification_url: String,
-    expires_in: u64,
-    interval: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -233,56 +228,61 @@ pub fn sync(config: &Config) -> Result<SyncReport, SyncError> {
     Ok(report)
 }
 
-pub fn start_device_flow(config: &GoogleConfig) -> Result<DeviceAuthSession, SyncError> {
+pub fn start_local_oauth_flow(config: &GoogleConfig) -> Result<AuthSession, SyncError> {
     if config.client_id.trim().is_empty() || config.client_secret.trim().is_empty() {
         return Err(SyncError::Config(
             "Google client_id/client_secret required in config.toml".to_string(),
         ));
     }
 
-    let client = Client::new();
+    let listener =
+        TcpListener::bind("127.0.0.1:0").map_err(|e| SyncError::Request(e.to_string()))?;
+    let addr = listener
+        .local_addr()
+        .map_err(|e| SyncError::Request(e.to_string()))?;
+    let redirect_uri = format!("http://{}", addr);
+    let expires_at = Local::now() + Duration::minutes(10);
+    let state = generate_state();
+
     let scope = "https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/tasks";
-    let resp = client
-        .post(OAUTH_DEVICE_URL)
-        .form(&[("client_id", config.client_id.as_str()), ("scope", scope)])
-        .send()
-        .map_err(|e| SyncError::Request(e.to_string()))?;
+    let auth_url = Url::parse_with_params(
+        OAUTH_AUTH_URL,
+        [
+            ("client_id", config.client_id.as_str()),
+            ("redirect_uri", redirect_uri.as_str()),
+            ("response_type", "code"),
+            ("scope", scope),
+            ("access_type", "offline"),
+            ("prompt", "consent"),
+            ("include_granted_scopes", "true"),
+            ("state", state.as_str()),
+        ],
+    )
+    .map_err(|e| SyncError::Request(e.to_string()))?
+    .to_string();
 
-    if !resp.status().is_success() {
-        return Err(SyncError::Request(format!(
-            "Device flow failed: HTTP {}",
-            resp.status()
-        )));
-    }
-
-    let body: DeviceCodeResponse = resp
-        .json()
-        .map_err(|e| SyncError::Request(e.to_string()))?;
-    let expires_at = Local::now() + Duration::seconds(body.expires_in as i64);
-    let interval = body.interval.unwrap_or(5);
-
-    Ok(DeviceAuthSession {
-        display: DeviceAuthDisplay {
-            user_code: body.user_code,
-            verification_url: body.verification_url,
+    Ok(AuthSession {
+        display: AuthDisplay {
+            auth_url,
+            listen_addr: addr.to_string(),
             expires_at,
         },
-        device_code: body.device_code,
-        interval,
+        listener,
+        state,
+        redirect_uri,
         expires_at,
     })
 }
 
-pub fn spawn_device_flow_poll(
+pub fn spawn_auth_flow_poll(
     config: GoogleConfig,
-    session: DeviceAuthSession,
+    session: AuthSession,
     token_path: PathBuf,
 ) -> Receiver<AuthPollResult> {
     let (tx, rx) = mpsc::channel();
 
     thread::spawn(move || {
         let client = Client::new();
-        let mut interval = session.interval.max(1);
         loop {
             if Local::now() >= session.expires_at {
                 let _ = tx.send(AuthPollResult::Error(
@@ -291,73 +291,24 @@ pub fn spawn_device_flow_poll(
                 return;
             }
 
-            let resp = client
-                .post(OAUTH_TOKEN_URL)
-                .form(&[
-                    ("client_id", config.client_id.as_str()),
-                    ("client_secret", config.client_secret.as_str()),
-                    ("device_code", session.device_code.as_str()),
-                    (
-                        "grant_type",
-                        "urn:ietf:params:oauth:grant-type:device_code",
-                    ),
-                ])
-                .send();
+            if let Err(err) = session.listener.set_nonblocking(true) {
+                let _ = tx.send(AuthPollResult::Error(err.to_string()));
+                return;
+            }
 
-            match resp {
-                Ok(resp) => {
-                    if resp.status().is_success() {
-                        let token = match resp.json::<TokenResponse>() {
-                            Ok(token) => token,
-                            Err(err) => {
-                                let _ = tx.send(AuthPollResult::Error(err.to_string()));
-                                return;
-                            }
-                        };
-                        let Some(refresh) = token.refresh_token else {
-                            let _ = tx.send(AuthPollResult::Error(
-                                "Missing refresh token from Google. Please re-authorize."
-                                    .to_string(),
-                            ));
-                            return;
-                        };
-                        let stored = StoredToken {
-                            access_token: token.access_token,
-                            refresh_token: refresh,
-                            expires_at: (Utc::now() + Duration::seconds(token.expires_in as i64))
-                                .timestamp(),
-                        };
-                        if let Err(err) = save_token(&token_path, &stored) {
-                            let _ = tx.send(AuthPollResult::Error(err.message()));
-                            return;
-                        }
+            match session.listener.accept() {
+                Ok((mut stream, _addr)) => {
+                    if let Err(err) =
+                        handle_auth_redirect(&client, &config, &session, &mut stream, &token_path)
+                    {
+                        let _ = tx.send(AuthPollResult::Error(err));
+                    } else {
                         let _ = tx.send(AuthPollResult::Success);
-                        return;
                     }
-
-                    let err_body = resp
-                        .json::<TokenErrorResponse>()
-                        .unwrap_or(TokenErrorResponse {
-                            error: "unknown".to_string(),
-                            error_description: None,
-                        });
-
-                    match err_body.error.as_str() {
-                        "authorization_pending" => {
-                            thread::sleep(std::time::Duration::from_secs(interval));
-                        }
-                        "slow_down" => {
-                            interval = interval.saturating_add(5);
-                            thread::sleep(std::time::Duration::from_secs(interval));
-                        }
-                        _ => {
-                            let message = err_body
-                                .error_description
-                                .unwrap_or(err_body.error);
-                            let _ = tx.send(AuthPollResult::Error(message));
-                            return;
-                        }
-                    }
+                    return;
+                }
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                    thread::sleep(StdDuration::from_millis(200));
                 }
                 Err(err) => {
                     let _ = tx.send(AuthPollResult::Error(err.to_string()));
@@ -384,7 +335,7 @@ fn ensure_access_token(config: &Config) -> Result<String, SyncError> {
 
     let token_path = google_token_path(config);
     if !token_path.exists() {
-        let session = start_device_flow(&config.google)?;
+        let session = start_local_oauth_flow(&config.google)?;
         return Err(SyncError::AuthRequired(session));
     }
 
@@ -400,7 +351,7 @@ fn ensure_access_token(config: &Config) -> Result<String, SyncError> {
             Ok(updated.access_token)
         }
         Err(_) => {
-            let session = start_device_flow(&config.google)?;
+            let session = start_local_oauth_flow(&config.google)?;
             Err(SyncError::AuthRequired(session))
         }
     }
@@ -446,6 +397,178 @@ fn load_token(path: &Path) -> Result<StoredToken, SyncError> {
     Ok(token)
 }
 
+fn handle_auth_redirect(
+    client: &Client,
+    config: &GoogleConfig,
+    session: &AuthSession,
+    stream: &mut std::net::TcpStream,
+    token_path: &Path,
+) -> Result<(), String> {
+    stream
+        .set_read_timeout(Some(StdDuration::from_secs(2)))
+        .map_err(|e| e.to_string())?;
+    let mut buf = Vec::new();
+    stream.read_to_end(&mut buf).map_err(|e| e.to_string())?;
+    let request = String::from_utf8_lossy(&buf);
+    let request_line = request.lines().next().unwrap_or("");
+    let path = request_line
+        .split_whitespace()
+        .nth(1)
+        .unwrap_or("/");
+    let query = path.split_once('?').map(|(_, q)| q).unwrap_or("");
+    let params = parse_query(query);
+
+    if let Some(error) = params.get("error") {
+        let desc = params
+            .get("error_description")
+            .map(|s| format!(" ({})", s))
+            .unwrap_or_default();
+        let _ = respond_with_message(stream, &format!(
+            "Authorization failed: {error}{desc}"
+        ));
+        return Err(format!("Google auth failed: {error}{desc}"));
+    }
+
+    let Some(code) = params.get("code") else {
+        let _ = respond_with_message(stream, "Missing authorization code.");
+        return Err("Missing authorization code from Google.".to_string());
+    };
+
+    if params.get("state").map(String::as_str) != Some(session.state.as_str()) {
+        let _ = respond_with_message(stream, "Invalid state.");
+        return Err("Invalid OAuth state. Please retry.".to_string());
+    }
+
+    let resp = client
+        .post(OAUTH_TOKEN_URL)
+        .form(&[
+            ("client_id", config.client_id.as_str()),
+            ("client_secret", config.client_secret.as_str()),
+            ("code", code.as_str()),
+            ("redirect_uri", session.redirect_uri.as_str()),
+            ("grant_type", "authorization_code"),
+        ])
+        .send()
+        .map_err(|e| e.to_string())?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().unwrap_or_default();
+        let detail = format_oauth_error(status, &body);
+        let _ = respond_with_message(stream, &format!("Authorization failed: {}", detail));
+        return Err(detail);
+    }
+
+    let token: TokenResponse = resp.json().map_err(|e| e.to_string())?;
+    let Some(refresh) = token.refresh_token else {
+        let _ = respond_with_message(
+            stream,
+            "Missing refresh token. Please retry and grant offline access.",
+        );
+        return Err("Missing refresh token from Google.".to_string());
+    };
+
+    let stored = StoredToken {
+        access_token: token.access_token,
+        refresh_token: refresh,
+        expires_at: (Utc::now() + Duration::seconds(token.expires_in as i64)).timestamp(),
+    };
+    save_token(token_path, &stored).map_err(|e| e.message())?;
+    let _ = respond_with_message(stream, "Authorization complete. You can close this window.");
+    Ok(())
+}
+
+fn respond_with_message(stream: &mut std::net::TcpStream, message: &str) -> io::Result<()> {
+    let body = format!("{message}\n");
+    let response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\n\r\n{}",
+        body.len(),
+        body
+    );
+    stream.write_all(response.as_bytes())
+}
+
+fn parse_query(query: &str) -> HashMap<String, String> {
+    let mut params = HashMap::new();
+    for pair in query.split('&') {
+        if pair.is_empty() {
+            continue;
+        }
+        let (key, value) = pair
+            .split_once('=')
+            .map(|(k, v)| (k, v))
+            .unwrap_or((pair, ""));
+        params.insert(decode_component(key), decode_component(value));
+    }
+    params
+}
+
+fn decode_component(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = String::new();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'+' => {
+                out.push(' ');
+                i += 1;
+            }
+            b'%' if i + 2 < bytes.len() => {
+                if let Some(hex) = std::str::from_utf8(&bytes[i + 1..i + 3])
+                    .ok()
+                    .and_then(|s| u8::from_str_radix(s, 16).ok())
+                {
+                    out.push(hex as char);
+                    i += 3;
+                } else {
+                    out.push('%');
+                    i += 1;
+                }
+            }
+            _ => {
+                out.push(bytes[i] as char);
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+fn generate_state() -> String {
+    use rand::{distributions::Alphanumeric, Rng};
+    rand::thread_rng()
+        .sample_iter(&Alphanumeric)
+        .take(32)
+        .map(char::from)
+        .collect()
+}
+
+fn format_oauth_error(status: reqwest::StatusCode, body: &str) -> String {
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        return format!("HTTP {}", status);
+    }
+
+    let summary = if let Ok(err) = serde_json::from_str::<TokenErrorResponse>(trimmed) {
+        if let Some(desc) = err.error_description {
+            format!("{} ({})", desc, err.error)
+        } else {
+            err.error
+        }
+    } else {
+        truncate_error(trimmed)
+    };
+    format!("HTTP {}: {}", status, summary)
+}
+
+fn truncate_error(message: &str) -> String {
+    let mut out = message.replace(['\n', '\r'], " ");
+    if out.len() > 240 {
+        out.truncate(240);
+        out.push_str("...");
+    }
+    out
+}
 fn save_token(path: &Path, token: &StoredToken) -> Result<(), SyncError> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;

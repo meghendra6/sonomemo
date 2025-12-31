@@ -1,5 +1,5 @@
 use crate::config::{Config, Theme};
-use crate::integrations::google::{AuthPollResult, DeviceAuthDisplay};
+use crate::integrations::google::{AuthDisplay, AuthPollResult};
 use crate::models::{
     DatePickerField, EditorMode, EntryIdentity, FoldOverride, FoldState, InputMode, LogEntry,
     NavigateFocus, PomodoroTarget, Priority, TaskFilter, TaskItem, TaskSchedule,
@@ -137,7 +137,7 @@ pub struct App<'a> {
     pub memo_preview_entry: Option<LogEntry>,
     pub memo_preview_scroll: usize,
     pub show_google_auth_popup: bool,
-    pub google_auth_display: Option<DeviceAuthDisplay>,
+    pub google_auth_display: Option<AuthDisplay>,
     pub google_auth_receiver: Option<Receiver<AuthPollResult>>,
 
     // Pomodoro completion alert (blocks input until expiry)
