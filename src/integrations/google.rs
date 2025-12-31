@@ -424,10 +424,18 @@ fn handle_auth_request(
     stream
         .set_read_timeout(Some(StdDuration::from_secs(2)))
         .map_err(|e| e.to_string())?;
-    let mut buf = Vec::new();
-    stream.read_to_end(&mut buf).map_err(|e| e.to_string())?;
-    let request = String::from_utf8_lossy(&buf);
+    let mut buf = [0u8; 2048];
+    let bytes_read = stream.read(&mut buf).map_err(|e| e.to_string())?;
+    if bytes_read == 0 {
+        let _ = respond_with_message(stream, "");
+        return Ok(AuthRequestOutcome::Continue);
+    }
+    let request = String::from_utf8_lossy(&buf[..bytes_read]);
     let request_line = request.lines().next().unwrap_or("");
+    if request_line.is_empty() {
+        let _ = respond_with_message(stream, "Invalid request.");
+        return Ok(AuthRequestOutcome::Continue);
+    }
     let path = request_line
         .split_whitespace()
         .nth(1)
