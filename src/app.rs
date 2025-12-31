@@ -710,6 +710,14 @@ impl<'a> App<'a> {
             FoldOverride::Folded
         };
         self.fold_overrides.insert(key, override_state);
+        if let Err(err) = storage::update_fold_marker(
+            &entry.file_path,
+            entry.line_number,
+            override_state,
+        ) {
+            eprintln!("Failed to save fold state: {}", err);
+            self.toast("Failed to save fold state.");
+        }
         self.entry_scroll_offset = 0;
     }
 

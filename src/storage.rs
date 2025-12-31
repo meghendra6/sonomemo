@@ -1,7 +1,7 @@
 use crate::models::{
-    AgendaItem, AgendaItemKind, Priority, LogEntry, TaskItem, TaskSchedule,
+    AgendaItem, AgendaItemKind, FoldOverride, Priority, LogEntry, TaskItem, TaskSchedule,
     count_trailing_tomatoes,
-    is_timestamped_line, strip_timestamp_prefix, strip_trailing_tomatoes,
+    is_heading_timestamp_line, is_timestamped_line, strip_timestamp_prefix, strip_trailing_tomatoes,
 };
 use crate::task_metadata::{
     TaskMetadataKey, parse_task_metadata, strip_task_metadata_tokens, upsert_task_metadata_token,
@@ -1035,6 +1035,59 @@ pub fn write_file_lines(file_path: &str, lines: &[String]) -> io::Result<()> {
         content.push('\n');
     }
     fs::write(path, content)
+}
+
+pub fn update_fold_marker(
+    file_path: &str,
+    start_line: usize,
+    state: FoldOverride,
+) -> io::Result<()> {
+    let content = fs::read_to_string(file_path)?;
+    let mut lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
+
+    if start_line >= lines.len() {
+        return Ok(());
+    }
+
+    if !is_heading_timestamp_line(&lines[start_line]) {
+        return Ok(());
+    }
+
+    let marker = fold_marker_line(state);
+    let insert_index = start_line + 1;
+    if insert_index < lines.len() && is_fold_marker_line(&lines[insert_index]) {
+        lines[insert_index] = marker.to_string();
+    } else {
+        lines.insert(insert_index, marker.to_string());
+    }
+
+    let mut new_content = lines.join("\n");
+    if !new_content.ends_with('\n') {
+        new_content.push('\n');
+    }
+    fs::write(file_path, new_content)
+}
+
+fn fold_marker_line(state: FoldOverride) -> &'static str {
+    match state {
+        FoldOverride::Expanded => "<!-- memolog:expanded -->",
+        FoldOverride::Folded => "<!-- memolog:folded -->",
+    }
+}
+
+fn is_fold_marker_line(line: &str) -> bool {
+    let trimmed = line.trim();
+    let Some(inner) = trimmed
+        .strip_prefix("<!--")
+        .and_then(|rest| rest.strip_suffix("-->"))
+    else {
+        return false;
+    };
+    let marker = inner.trim();
+    matches!(
+        marker,
+        "memolog:expanded" | "memolog:folded" | "memolog:collapsed"
+    )
 }
 
 pub fn append_tomato_to_line(file_path: &str, line_number: usize) -> io::Result<()> {

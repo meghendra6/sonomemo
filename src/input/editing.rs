@@ -2,7 +2,7 @@ use crate::{
     app::App,
     config::key_match,
     editor::markdown,
-    models::{EditorMode, InputMode},
+    models::{EditorMode, EntryIdentity, InputMode},
     storage,
 };
 use chrono::{Duration, Local};
@@ -171,6 +171,20 @@ pub(crate) fn submit_composer(app: &mut App) {
             &new_lines,
         ) {
             eprintln!("Error updating entry: {}", e);
+        }
+        if let Some(state) = app
+            .fold_overrides
+            .get(&EntryIdentity {
+                file_path: editing.file_path.clone(),
+                line_number: editing.start_line,
+            })
+            .copied()
+        {
+            let _ = storage::update_fold_marker(
+                &editing.file_path,
+                editing.start_line,
+                state,
+            );
         }
         if editing.from_search {
             if let Some(query) = editing.search_query.as_deref() {
