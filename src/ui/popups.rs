@@ -1,4 +1,4 @@
-use super::components::{centered_rect, parse_markdown_spans, wrap_markdown_line};
+use super::components::{centered_rect, markdown_prefix_width, parse_markdown_spans, wrap_markdown_line};
 use crate::app::App;
 use crate::config::{EditorStyle, ThemePreset};
 use crate::models::{DatePickerField, EditorMode, InputMode, Mood, VisualKind};
@@ -12,6 +12,7 @@ use ratatui::{
     text::{Line, Span, Text},
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
 };
+use syntect::easy::HighlightLines;
 
 pub fn render_siren_popup(f: &mut Frame, app: &App) {
     let block = Block::default().borders(Borders::ALL).style(
@@ -160,17 +161,84 @@ pub fn render_memo_preview_popup(f: &mut Frame, app: &App) {
 
     let width = content_area.width.saturating_sub(2).max(1) as usize;
     let mut lines: Vec<Line<'static>> = Vec::new();
+    let theme_preset = super::resolve_theme_preset(&app.config);
+    let syntax_set = super::syntax_set();
+    let syntax_theme = super::select_syntax_theme(super::syntax_theme_set(), &tokens, theme_preset);
+    let code_bg = super::code_block_background(&tokens);
+    let fence_style = super::code_fallback_style(code_bg).fg(tokens.ui_muted);
+    let mut in_code_block = false;
+    let mut code_highlighter: Option<HighlightLines> = None;
 
     for raw_line in entry.content.lines() {
+        let trimmed = raw_line.trim_start();
+        let is_fence = trimmed.starts_with("```");
+        let opening_fence = is_fence && !in_code_block;
+        let closing_fence = is_fence && in_code_block;
+        if opening_fence {
+            let language = super::parse_fence_language(trimmed);
+            let syntax = super::syntax_for_language(syntax_set, language.as_deref());
+            code_highlighter = Some(HighlightLines::new(syntax, syntax_theme));
+        }
+
+        let line_in_code_block = in_code_block || is_fence;
         let wrapped = wrap_markdown_line(raw_line, width);
-        for line in wrapped {
-            lines.push(Line::from(parse_markdown_spans(
-                &line,
-                &app.config.theme,
-                false,
-                None,
-                Style::default(),
-            )));
+        let code_segments = if line_in_code_block {
+            if is_fence {
+                Some(vec![super::StyledSegment {
+                    text: raw_line.to_string(),
+                    style: fence_style,
+                }])
+            } else if let Some(highlighter) = code_highlighter.as_mut() {
+                Some(super::highlight_code_line(
+                    raw_line,
+                    highlighter,
+                    syntax_set,
+                    code_bg,
+                ))
+            } else {
+                Some(vec![super::StyledSegment {
+                    text: raw_line.to_string(),
+                    style: super::code_fallback_style(code_bg),
+                }])
+            }
+        } else {
+            None
+        };
+        let prefix_width = if code_segments.is_some() {
+            markdown_prefix_width(raw_line)
+        } else {
+            0
+        };
+        let mut segment_start_col = 0usize;
+        for (wrap_idx, line) in wrapped.iter().enumerate() {
+            if let Some(segments) = code_segments.as_ref() {
+                let segment_len = line.chars().count();
+                let (code_spans, consumed_len) = super::code_spans_for_wrapped_line(
+                    segments,
+                    wrap_idx,
+                    segment_start_col,
+                    segment_len,
+                    prefix_width,
+                    code_bg,
+                );
+                lines.push(Line::from(code_spans));
+                segment_start_col = segment_start_col.saturating_add(consumed_len);
+            } else {
+                lines.push(Line::from(parse_markdown_spans(
+                    line,
+                    &app.config.theme,
+                    line_in_code_block,
+                    None,
+                    Style::default(),
+                )));
+            }
+        }
+
+        if closing_fence {
+            in_code_block = false;
+            code_highlighter = None;
+        } else if opening_fence {
+            in_code_block = true;
         }
     }
 

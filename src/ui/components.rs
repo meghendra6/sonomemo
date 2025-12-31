@@ -430,6 +430,11 @@ pub fn wrap_markdown_line(text: &str, width: usize) -> Vec<String> {
     out
 }
 
+pub(crate) fn markdown_prefix_width(text: &str) -> usize {
+    let (_prefix, _rest, width) = split_markdown_prefix(text);
+    width
+}
+
 fn split_markdown_prefix(text: &str) -> (String, &str, usize) {
     let (leading, rest) = normalize_leading_whitespace(text);
 
