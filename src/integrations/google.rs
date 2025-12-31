@@ -7,7 +7,7 @@ use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::io::{self, Read, Write};
+use std::io::{self, BufRead, BufReader, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
@@ -422,17 +422,18 @@ fn handle_auth_request(
     token_path: &Path,
 ) -> Result<AuthRequestOutcome, String> {
     stream
-        .set_read_timeout(Some(StdDuration::from_secs(2)))
+        .set_read_timeout(Some(StdDuration::from_secs(10)))
         .map_err(|e| e.to_string())?;
-    let mut buf = [0u8; 2048];
-    let bytes_read = stream.read(&mut buf).map_err(|e| e.to_string())?;
-    if bytes_read == 0 {
-        let _ = respond_with_message(stream, "");
-        return Ok(AuthRequestOutcome::Continue);
-    }
-    let request = String::from_utf8_lossy(&buf[..bytes_read]);
-    let request_line = request.lines().next().unwrap_or("");
-    if request_line.is_empty() {
+    let mut reader = BufReader::new(
+        stream
+            .try_clone()
+            .map_err(|e| e.to_string())?,
+    );
+    let mut request_line = String::new();
+    let bytes_read = reader
+        .read_line(&mut request_line)
+        .map_err(|e| e.to_string())?;
+    if bytes_read == 0 || request_line.trim().is_empty() {
         let _ = respond_with_message(stream, "Invalid request.");
         return Ok(AuthRequestOutcome::Continue);
     }
