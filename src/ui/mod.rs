@@ -2,7 +2,7 @@ use chrono::{Local, Timelike};
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, BorderType, Borders, List, ListItem, ListState, Paragraph},
 };
@@ -15,6 +15,10 @@ use crate::models::{
 use ratatui::style::Stylize;
 use regex::Regex;
 use std::path::Path;
+use std::sync::OnceLock;
+use syntect::easy::HighlightLines;
+use syntect::highlighting::{FontStyle as SyntectFontStyle, ThemeSet};
+use syntect::parsing::{SyntaxReference, SyntaxSet};
 use unicode_width::UnicodeWidthStr;
 
 pub mod color_parser;
@@ -728,11 +732,70 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                     true,
                 ));
             } else {
+                let (code_block_info, cursor_block_id) =
+                    collect_code_block_info(lines, cursor_row);
+                let syntax_set = syntax_set();
+                let syntax_theme = select_syntax_theme(syntax_theme_set(), &tokens);
+                let code_bg = code_block_background(&tokens);
+                let mut active_block_id: Option<usize> = None;
+                let mut highlighter: Option<HighlightLines> = None;
+
                 for (logical_idx, line) in lines.iter().enumerate() {
+                    let line_info = &code_block_info[logical_idx];
+                    if line_info.block_id != active_block_id {
+                        active_block_id = line_info.block_id;
+                        highlighter = None;
+                        if active_block_id.is_some() {
+                            let syntax = syntax_for_language(syntax_set, line_info.language.as_deref());
+                            highlighter = Some(HighlightLines::new(syntax, syntax_theme));
+                        }
+                    }
+
+                    let show_fence = line_info.block_id.is_some()
+                        && cursor_block_id.is_some()
+                        && line_info.block_id == cursor_block_id;
+                    let (display_line, styled_segments) = if line_info.is_fence {
+                        let display = if show_fence {
+                            line.to_string()
+                        } else {
+                            hide_fence_marker(line)
+                        };
+                        let mut style = if show_fence {
+                            Style::default()
+                                .fg(tokens.ui_accent)
+                                .add_modifier(Modifier::BOLD)
+                        } else {
+                            Style::default()
+                                .fg(tokens.ui_muted)
+                                .add_modifier(Modifier::DIM)
+                        };
+                        if let Some(bg) = code_bg {
+                            style = style.bg(bg);
+                        }
+                        let segments = vec![StyledSegment {
+                            text: display.clone(),
+                            style,
+                        }];
+                        (display, Some(segments))
+                    } else if line_info.block_id.is_some() {
+                        let display = line.to_string();
+                        let segments = if let Some(highlighter) = highlighter.as_mut() {
+                            highlight_code_line(&display, highlighter, syntax_set, code_bg)
+                        } else {
+                            vec![StyledSegment {
+                                text: display.clone(),
+                                style: code_fallback_style(code_bg),
+                            }]
+                        };
+                        (display, Some(segments))
+                    } else {
+                        (line.to_string(), None)
+                    };
+
                     let is_cursor_line = logical_idx == cursor_row;
                     let selection =
-                        selection_range_for_line(app, logical_idx, line.chars().count());
-                    let wrapped = wrap_line_for_editor(line, content_width);
+                        selection_range_for_line(app, logical_idx, display_line.chars().count());
+                    let wrapped = wrap_line_for_editor(&display_line, content_width);
                     let mut segment_start_col = 0usize;
 
                     if is_cursor_line {
@@ -749,6 +812,13 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                         let is_first_wrap = wrap_idx == 0;
                         let is_cursor_wrap =
                             is_cursor_line && (visual_lines.len() + wrap_idx == cursor_visual_row);
+                        let content_override = styled_segments.as_ref().map(|segments| {
+                            slice_segments(
+                                segments,
+                                segment_start_col,
+                                segment_start_col.saturating_add(segment_len),
+                            )
+                        });
                         visual_lines.push(compose_wrapped_line(
                             wline,
                             &tokens,
@@ -758,6 +828,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                             is_first_wrap,
                             selection,
                             segment_start_col,
+                            content_override,
                         ));
                         segment_start_col = segment_start_col.saturating_add(segment_len);
                     }
@@ -1022,6 +1093,275 @@ struct StyledSegment {
     style: Style,
 }
 
+#[derive(Clone)]
+struct CodeBlockLineInfo {
+    block_id: Option<usize>,
+    is_fence: bool,
+    language: Option<String>,
+}
+
+fn collect_code_block_info(
+    lines: &[String],
+    cursor_row: usize,
+) -> (Vec<CodeBlockLineInfo>, Option<usize>) {
+    let mut info = Vec::with_capacity(lines.len());
+    let mut in_code_block = false;
+    let mut current_block_id: Option<usize> = None;
+    let mut current_language: Option<String> = None;
+    let mut next_block_id = 0usize;
+    let mut cursor_block_id = None;
+
+    for (idx, line) in lines.iter().enumerate() {
+        let trimmed = line.trim_start();
+        let is_fence = trimmed.starts_with("```");
+        let mut line_info = CodeBlockLineInfo {
+            block_id: current_block_id,
+            is_fence,
+            language: None,
+        };
+
+        if is_fence {
+            if !in_code_block {
+                next_block_id = next_block_id.saturating_add(1);
+                current_block_id = Some(next_block_id);
+                current_language = parse_fence_language(trimmed);
+                line_info.block_id = current_block_id;
+                line_info.language = current_language.clone();
+                in_code_block = true;
+            } else {
+                line_info.block_id = current_block_id;
+                line_info.language = current_language.clone();
+                in_code_block = false;
+                current_block_id = None;
+                current_language = None;
+            }
+        } else if in_code_block {
+            line_info.block_id = current_block_id;
+            line_info.language = current_language.clone();
+        }
+
+        if idx == cursor_row {
+            cursor_block_id = line_info.block_id;
+        }
+        info.push(line_info);
+    }
+
+    (info, cursor_block_id)
+}
+
+fn parse_fence_language(trimmed: &str) -> Option<String> {
+    let rest = trimmed.trim_start_matches('`').trim();
+    let candidate = rest.split_whitespace().next().unwrap_or("");
+    if candidate.is_empty() {
+        None
+    } else {
+        Some(candidate.to_string())
+    }
+}
+
+fn hide_fence_marker(line: &str) -> String {
+    let trimmed = line.trim_start();
+    let fence_len = trimmed.chars().take_while(|&c| c == '`').count();
+    if fence_len == 0 {
+        return line.to_string();
+    }
+
+    let leading_len = line.len().saturating_sub(trimmed.len());
+    let fence_start = leading_len;
+    let fence_end = fence_start.saturating_add(fence_len);
+    let mut out = String::with_capacity(line.len());
+    out.push_str(&line[..fence_start]);
+    out.extend(std::iter::repeat(' ').take(fence_len));
+    out.push_str(&line[fence_end..]);
+    out
+}
+
+fn syntax_set() -> &'static SyntaxSet {
+    static SYNTAX_SET: OnceLock<SyntaxSet> = OnceLock::new();
+    SYNTAX_SET.get_or_init(SyntaxSet::load_defaults_newlines)
+}
+
+fn syntax_theme_set() -> &'static ThemeSet {
+    static THEME_SET: OnceLock<ThemeSet> = OnceLock::new();
+    THEME_SET.get_or_init(ThemeSet::load_defaults)
+}
+
+fn select_syntax_theme<'a>(
+    theme_set: &'a ThemeSet,
+    tokens: &theme::ThemeTokens,
+) -> &'a syntect::highlighting::Theme {
+    let prefer_light = is_light_color(tokens.ui_bg).unwrap_or(false);
+    let candidates = if prefer_light {
+        ["InspiredGitHub", "base16-ocean.light"]
+    } else {
+        ["base16-ocean.dark", "Solarized (dark)"]
+    };
+
+    for name in candidates {
+        if let Some(theme) = theme_set.themes.get(name) {
+            return theme;
+        }
+    }
+
+    theme_set
+        .themes
+        .values()
+        .next()
+        .expect("syntect theme set is empty")
+}
+
+fn syntax_for_language<'a>(
+    syntax_set: &'a SyntaxSet,
+    language: Option<&str>,
+) -> &'a SyntaxReference {
+    if let Some(lang) = language {
+        let lang = lang.trim();
+        if !lang.is_empty() {
+            if let Some(syntax) = syntax_set.find_syntax_by_token(lang) {
+                return syntax;
+            }
+            if let Some(syntax) = syntax_set.find_syntax_by_extension(lang) {
+                return syntax;
+            }
+        }
+    }
+    syntax_set.find_syntax_plain_text()
+}
+
+fn highlight_code_line(
+    line: &str,
+    highlighter: &mut HighlightLines,
+    syntax_set: &SyntaxSet,
+    code_bg: Option<Color>,
+) -> Vec<StyledSegment> {
+    let ranges = match highlighter.highlight_line(line, syntax_set) {
+        Ok(ranges) => ranges,
+        Err(_) => {
+            return vec![StyledSegment {
+                text: line.to_string(),
+                style: code_fallback_style(code_bg),
+            }];
+        }
+    };
+
+    if ranges.is_empty() {
+        return vec![StyledSegment {
+            text: line.to_string(),
+            style: code_fallback_style(code_bg),
+        }];
+    }
+
+    ranges
+        .into_iter()
+        .map(|(style, text)| {
+            let mut out = syntect_style_to_ratatui(style);
+            if let Some(bg) = code_bg {
+                out = out.bg(bg);
+            }
+            StyledSegment {
+                text: text.to_string(),
+                style: out,
+            }
+        })
+        .collect()
+}
+
+fn syntect_style_to_ratatui(style: syntect::highlighting::Style) -> Style {
+    let mut out = Style::default().fg(Color::Rgb(
+        style.foreground.r,
+        style.foreground.g,
+        style.foreground.b,
+    ));
+    if style.font_style.contains(SyntectFontStyle::BOLD) {
+        out = out.add_modifier(Modifier::BOLD);
+    }
+    if style.font_style.contains(SyntectFontStyle::ITALIC) {
+        out = out.add_modifier(Modifier::ITALIC);
+    }
+    if style.font_style.contains(SyntectFontStyle::UNDERLINE) {
+        out = out.add_modifier(Modifier::UNDERLINED);
+    }
+    out
+}
+
+fn code_block_background(tokens: &theme::ThemeTokens) -> Option<Color> {
+    match tokens.ui_bg {
+        Color::Rgb(r, g, b) => {
+            let lum = 0.2126 * (r as f32) + 0.7152 * (g as f32) + 0.0722 * (b as f32);
+            let delta: i16 = if lum < 128.0 { 18 } else { -18 };
+            Some(Color::Rgb(
+                shift_channel(r, delta),
+                shift_channel(g, delta),
+                shift_channel(b, delta),
+            ))
+        }
+        Color::Black => Some(Color::Rgb(20, 20, 20)),
+        Color::White => Some(Color::Rgb(235, 235, 235)),
+        Color::DarkGray => Some(Color::Rgb(56, 56, 56)),
+        Color::Gray => Some(Color::Rgb(160, 160, 160)),
+        _ => None,
+    }
+}
+
+fn shift_channel(value: u8, delta: i16) -> u8 {
+    let next = (value as i16).saturating_add(delta);
+    next.clamp(0, 255) as u8
+}
+
+fn is_light_color(color: Color) -> Option<bool> {
+    match color {
+        Color::Rgb(r, g, b) => {
+            let lum = 0.2126 * (r as f32) + 0.7152 * (g as f32) + 0.0722 * (b as f32);
+            Some(lum >= 128.0)
+        }
+        Color::White | Color::Gray => Some(true),
+        Color::Black | Color::DarkGray => Some(false),
+        _ => None,
+    }
+}
+
+fn code_fallback_style(code_bg: Option<Color>) -> Style {
+    let mut style = Style::default().add_modifier(Modifier::DIM);
+    if let Some(bg) = code_bg {
+        style = style.bg(bg);
+    }
+    style
+}
+
+fn slice_segments(
+    segments: &[StyledSegment],
+    start: usize,
+    end: usize,
+) -> Vec<StyledSegment> {
+    let mut out = Vec::new();
+    let mut pos = 0usize;
+    let end = end.max(start);
+
+    for seg in segments {
+        let seg_len = seg.text.chars().count();
+        let seg_start = pos;
+        let seg_end = pos + seg_len;
+        if end <= seg_start {
+            break;
+        }
+        if start >= seg_end {
+            pos = seg_end;
+            continue;
+        }
+        let local_start = start.saturating_sub(seg_start).min(seg_len);
+        let local_end = end.saturating_sub(seg_start).min(seg_len);
+        if local_end > local_start {
+            out.push(StyledSegment {
+                text: slice_by_char(&seg.text, local_start, local_end),
+                style: seg.style,
+            });
+        }
+        pos = seg_end;
+    }
+
+    out
+}
+
 // UI render helper keeps explicit parameters.
 #[allow(clippy::too_many_arguments)]
 fn compose_wrapped_line(
@@ -1033,6 +1373,7 @@ fn compose_wrapped_line(
     is_first_wrap: bool,
     selection: Option<SelectionRange>,
     wrap_start_col: usize,
+    content_override: Option<Vec<StyledSegment>>,
 ) -> Line<'static> {
     let mut spans: Vec<Span<'static>> = Vec::new();
 
@@ -1063,40 +1404,44 @@ fn compose_wrapped_line(
         spans.push(Span::styled("↪ ", Style::default().fg(tokens.ui_muted)));
     }
 
-    let mut content_segments: Vec<StyledSegment> = Vec::new();
-
-    // For first wrapped line, parse indent and bullets; for continuations, just show text
-    if is_first_wrap {
-        let (indent_level, indent, rest) = split_indent(line);
-        if !indent.is_empty() {
-            content_segments.push(StyledSegment {
-                text: indent.to_string(),
-                style: Style::default(),
-            });
-        }
-        if let Some((bullet, tail)) = replace_list_bullet(rest, indent_level) {
-            content_segments.push(StyledSegment {
-                text: format!("{bullet} "),
-                style: Style::default()
-                    .fg(tokens.ui_accent)
-                    .add_modifier(Modifier::BOLD),
-            });
-            content_segments.push(StyledSegment {
-                text: tail.to_string(),
-                style: Style::default(),
-            });
-        } else {
-            content_segments.push(StyledSegment {
-                text: rest.to_string(),
-                style: Style::default(),
-            });
-        }
+    let content_segments: Vec<StyledSegment> = if let Some(segments) = content_override {
+        segments
     } else {
-        content_segments.push(StyledSegment {
-            text: line.to_string(),
-            style: Style::default(),
-        });
-    }
+        let mut segments = Vec::new();
+        // For first wrapped line, parse indent and bullets; for continuations, just show text
+        if is_first_wrap {
+            let (indent_level, indent, rest) = split_indent(line);
+            if !indent.is_empty() {
+                segments.push(StyledSegment {
+                    text: indent.to_string(),
+                    style: Style::default(),
+                });
+            }
+            if let Some((bullet, tail)) = replace_list_bullet(rest, indent_level) {
+                segments.push(StyledSegment {
+                    text: format!("{bullet} "),
+                    style: Style::default()
+                        .fg(tokens.ui_accent)
+                        .add_modifier(Modifier::BOLD),
+                });
+                segments.push(StyledSegment {
+                    text: tail.to_string(),
+                    style: Style::default(),
+                });
+            } else {
+                segments.push(StyledSegment {
+                    text: rest.to_string(),
+                    style: Style::default(),
+                });
+            }
+        } else {
+            segments.push(StyledSegment {
+                text: line.to_string(),
+                style: Style::default(),
+            });
+        }
+        segments
+    };
 
     let selection_spans = apply_selection_to_segments(
         content_segments,
@@ -1940,6 +2285,8 @@ fn file_date(file_path: &str) -> Option<String> {
 mod tests {
     use super::compose_prefix_width;
     use super::compose_wrapped_line;
+    use super::collect_code_block_info;
+    use super::hide_fence_marker;
     use crate::config::Theme;
     use crate::ui::theme::ThemeTokens;
 
@@ -1954,27 +2301,31 @@ mod tests {
     fn renders_bullets_with_indentation_levels() {
         let tokens = ThemeTokens::from_theme(&Theme::default());
 
-        let top = compose_wrapped_line("* item1", &tokens, false, 0, false, true, None, 0);
+        let top = compose_wrapped_line("* item1", &tokens, false, 0, false, true, None, 0, None);
         assert_eq!(line_to_string(&top), "| • item1");
 
-        let nested = compose_wrapped_line("  * sub1", &tokens, false, 1, false, true, None, 0);
+        let nested =
+            compose_wrapped_line("  * sub1", &tokens, false, 1, false, true, None, 0, None);
         assert_eq!(line_to_string(&nested), "|   ◦ sub1");
 
-        let deep = compose_wrapped_line("    - sub2", &tokens, false, 2, false, true, None, 0);
+        let deep =
+            compose_wrapped_line("    - sub2", &tokens, false, 2, false, true, None, 0, None);
         assert_eq!(line_to_string(&deep), "|     ▪ sub2");
     }
 
     #[test]
     fn preserves_non_list_lines_verbatim() {
         let tokens = ThemeTokens::from_theme(&Theme::default());
-        let line = compose_wrapped_line("plain text", &tokens, false, 0, false, true, None, 0);
+        let line =
+            compose_wrapped_line("plain text", &tokens, false, 0, false, true, None, 0, None);
         assert_eq!(line_to_string(&line), "| plain text");
     }
 
     #[test]
     fn renders_line_numbers_in_gutter() {
         let tokens = ThemeTokens::from_theme(&Theme::default());
-        let line = compose_wrapped_line("plain text", &tokens, false, 9, true, true, None, 0);
+        let line =
+            compose_wrapped_line("plain text", &tokens, false, 9, true, true, None, 0, None);
         assert_eq!(line_to_string(&line), " 10 | plain text");
     }
 
@@ -1982,6 +2333,28 @@ mod tests {
     fn prefix_width_accounts_for_line_numbers() {
         assert_eq!(compose_prefix_width(false), 2);
         assert_eq!(compose_prefix_width(true), 6);
+    }
+
+    #[test]
+    fn hides_fence_marker_ticks() {
+        assert_eq!(hide_fence_marker("```python"), "   python");
+        assert_eq!(hide_fence_marker("  ```"), "     ");
+    }
+
+    #[test]
+    fn tracks_code_block_ranges_for_cursor() {
+        let lines = vec![
+            "intro".to_string(),
+            "```python".to_string(),
+            "print('hi')".to_string(),
+            "```".to_string(),
+            "after".to_string(),
+        ];
+        let (info, cursor_block_id) = collect_code_block_info(&lines, 2);
+        assert!(info[1].is_fence);
+        assert!(info[2].block_id.is_some());
+        assert_eq!(info[2].language.as_deref(), Some("python"));
+        assert_eq!(cursor_block_id, info[2].block_id);
     }
 
     use super::find_cursor_in_wrapped_lines;
