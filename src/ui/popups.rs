@@ -731,17 +731,20 @@ pub fn render_google_auth_popup(f: &mut Frame, app: &App) {
         };
 
         lines.push(Line::from(Span::raw(
-            "Open this URL in your browser:",
+            "Open this local URL in your browser:",
         )));
         lines.push(Line::from(Span::styled(
-            display.auth_url.as_str(),
+            display.local_url.as_str(),
             Style::default()
                 .fg(tokens.ui_accent)
                 .add_modifier(Modifier::BOLD),
         )));
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
-            format!("Waiting for redirect on {}", display.listen_addr),
+            format!(
+                "This will redirect to Google and back to {}",
+                display.listen_addr
+            ),
             Style::default().fg(tokens.ui_muted),
         )));
         lines.push(Line::from(Span::styled(

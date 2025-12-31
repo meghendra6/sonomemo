@@ -715,7 +715,7 @@ fn handle_path_popup(app: &mut App, key: KeyEvent) {
 fn handle_google_auth_popup(app: &mut App, key: KeyEvent) {
     if key_match(&key, &app.config.keybindings.popup.confirm) {
         if let Some(display) = app.google_auth_display.as_ref() {
-            if let Err(e) = open::that(&display.auth_url) {
+            if let Err(e) = open::that(&display.local_url) {
                 eprintln!("Failed to open browser: {}", e);
             }
         }

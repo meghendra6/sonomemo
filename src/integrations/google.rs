@@ -50,6 +50,7 @@ impl From<io::Error> for SyncError {
 #[derive(Clone, Debug)]
 pub struct AuthDisplay {
     pub auth_url: String,
+    pub local_url: String,
     pub listen_addr: String,
     pub expires_at: DateTime<Local>,
 }
@@ -241,6 +242,7 @@ pub fn start_local_oauth_flow(config: &GoogleConfig) -> Result<AuthSession, Sync
         .local_addr()
         .map_err(|e| SyncError::Request(e.to_string()))?;
     let redirect_uri = format!("http://{}", addr);
+    let local_url = redirect_uri.clone();
     let expires_at = Local::now() + Duration::minutes(10);
     let state = generate_state();
 
@@ -264,6 +266,7 @@ pub fn start_local_oauth_flow(config: &GoogleConfig) -> Result<AuthSession, Sync
     Ok(AuthSession {
         display: AuthDisplay {
             auth_url,
+            local_url,
             listen_addr: addr.to_string(),
             expires_at,
         },
@@ -298,14 +301,23 @@ pub fn spawn_auth_flow_poll(
 
             match session.listener.accept() {
                 Ok((mut stream, _addr)) => {
-                    if let Err(err) =
-                        handle_auth_redirect(&client, &config, &session, &mut stream, &token_path)
-                    {
-                        let _ = tx.send(AuthPollResult::Error(err));
-                    } else {
-                        let _ = tx.send(AuthPollResult::Success);
+                    match handle_auth_request(
+                        &client,
+                        &config,
+                        &session,
+                        &mut stream,
+                        &token_path,
+                    ) {
+                        Ok(AuthRequestOutcome::Continue) => {}
+                        Ok(AuthRequestOutcome::Success) => {
+                            let _ = tx.send(AuthPollResult::Success);
+                            return;
+                        }
+                        Err(err) => {
+                            let _ = tx.send(AuthPollResult::Error(err));
+                            return;
+                        }
                     }
-                    return;
                 }
                 Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
                     thread::sleep(StdDuration::from_millis(200));
@@ -397,13 +409,18 @@ fn load_token(path: &Path) -> Result<StoredToken, SyncError> {
     Ok(token)
 }
 
-fn handle_auth_redirect(
+enum AuthRequestOutcome {
+    Continue,
+    Success,
+}
+
+fn handle_auth_request(
     client: &Client,
     config: &GoogleConfig,
     session: &AuthSession,
     stream: &mut std::net::TcpStream,
     token_path: &Path,
-) -> Result<(), String> {
+) -> Result<AuthRequestOutcome, String> {
     stream
         .set_read_timeout(Some(StdDuration::from_secs(2)))
         .map_err(|e| e.to_string())?;
@@ -417,6 +434,15 @@ fn handle_auth_redirect(
         .unwrap_or("/");
     let query = path.split_once('?').map(|(_, q)| q).unwrap_or("");
     let params = parse_query(query);
+
+    if query.is_empty() || path.starts_with("/start") {
+        let _ = respond_with_redirect(stream, &session.display.auth_url);
+        return Ok(AuthRequestOutcome::Continue);
+    }
+    if path.starts_with("/favicon.ico") {
+        let _ = respond_with_message(stream, "");
+        return Ok(AuthRequestOutcome::Continue);
+    }
 
     if let Some(error) = params.get("error") {
         let desc = params
@@ -475,7 +501,14 @@ fn handle_auth_redirect(
     };
     save_token(token_path, &stored).map_err(|e| e.message())?;
     let _ = respond_with_message(stream, "Authorization complete. You can close this window.");
-    Ok(())
+    Ok(AuthRequestOutcome::Success)
+}
+
+fn respond_with_redirect(stream: &mut std::net::TcpStream, url: &str) -> io::Result<()> {
+    let response = format!(
+        "HTTP/1.1 302 Found\r\nLocation: {url}\r\nContent-Length: 0\r\n\r\n"
+    );
+    stream.write_all(response.as_bytes())
 }
 
 fn respond_with_message(stream: &mut std::net::TcpStream, message: &str) -> io::Result<()> {
