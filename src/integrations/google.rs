@@ -948,6 +948,7 @@ fn sync_events(
     let claimed_remote: HashSet<String> =
         state.events.values().map(|entry| entry.google_id.clone()).collect();
     let mut remote_match: HashMap<String, Vec<RemoteEvent>> = HashMap::new();
+    let mut remote_text_match: HashMap<String, Vec<RemoteEvent>> = HashMap::new();
     for item in remote_items {
         if claimed_remote.contains(&item.id) {
             continue;
@@ -961,6 +962,8 @@ fn sync_events(
             anchor_date,
         );
         remote_match.entry(key).or_default().push(item.clone());
+        let text_key = normalize_match_text(item.summary.as_deref().unwrap_or("Untitled event"));
+        remote_text_match.entry(text_key).or_default().push(item.clone());
     }
 
     for item in local_items {
@@ -969,25 +972,44 @@ fn sync_events(
         }
         let key = local_event_key(item);
         let hash = event_hash(item);
-        let stored = match state.events.get(&key).cloned() {
+        let mut stored = match state.events.get(&key).cloned() {
             Some(entry) => Some(entry),
             None => rekey_state_by_hash(&mut state.events, &key, &hash),
         };
-        let remote = stored
+        let mut remote = stored
             .as_ref()
             .and_then(|entry| remote_by_id.get(&entry.google_id));
         let match_key = event_match_key(&item.text, &item.schedule, item.date);
         if stored.is_none() || remote.is_none() {
-            if let Some(remote) = take_match(&mut remote_match, &match_key) {
-                state.events.insert(
-                    key,
-                    SyncItem {
-                        google_id: remote.id.clone(),
-                        hash,
-                        remote_updated: remote.updated.clone(),
-                    },
+            if let Some(matched_remote) = take_match(&mut remote_match, &match_key) {
+                let entry = SyncItem {
+                    google_id: matched_remote.id.clone(),
+                    hash: event_hash_from_remote(&matched_remote),
+                    remote_updated: matched_remote.updated.clone(),
+                };
+                state.events.insert(key.clone(), entry.clone());
+                stored = Some(entry);
+                remote = remote_by_id.get(&matched_remote.id);
+            } else if let Some(matched_remote) =
+                take_unique_match(&mut remote_text_match, &normalize_match_text(&item.text))
+            {
+                let schedule = schedule_from_remote_event(&matched_remote);
+                let anchor_date = schedule_anchor_date(&schedule)
+                    .unwrap_or_else(|| Local::now().date_naive());
+                let strict_key = event_match_key(
+                    matched_remote.summary.as_deref().unwrap_or("Untitled event"),
+                    &schedule,
+                    anchor_date,
                 );
-                continue;
+                remove_event_match(&mut remote_match, &strict_key, &matched_remote.id);
+                let entry = SyncItem {
+                    google_id: matched_remote.id.clone(),
+                    hash: event_hash_from_remote(&matched_remote),
+                    remote_updated: matched_remote.updated.clone(),
+                };
+                state.events.insert(key.clone(), entry.clone());
+                stored = Some(entry);
+                remote = remote_by_id.get(&matched_remote.id);
             }
         }
 
@@ -1437,6 +1459,31 @@ fn take_match<T>(matches: &mut HashMap<String, Vec<T>>, key: &str) -> Option<T> 
     item
 }
 
+fn take_unique_match<T>(matches: &mut HashMap<String, Vec<T>>, key: &str) -> Option<T> {
+    let Some(values) = matches.get_mut(key) else {
+        return None;
+    };
+    if values.len() != 1 {
+        return None;
+    }
+    let item = values.pop();
+    matches.remove(key);
+    item
+}
+
+fn remove_event_match(
+    matches: &mut HashMap<String, Vec<RemoteEvent>>,
+    key: &str,
+    id: &str,
+) {
+    if let Some(values) = matches.get_mut(key) {
+        values.retain(|item| item.id != id);
+        if values.is_empty() {
+            matches.remove(key);
+        }
+    }
+}
+
 fn rekey_state_by_hash(
     state: &mut HashMap<String, SyncItem>,
     key: &str,
@@ -1525,6 +1572,17 @@ fn task_hash_from_update(update: &TaskLineUpdate) -> String {
 fn event_hash_from_update(update: &NoteLineUpdate) -> String {
     let schedule = schedule_signature(&update.schedule);
     stable_hash(&format!("{}|{}", update.text, schedule))
+}
+
+fn event_hash_from_remote(remote: &RemoteEvent) -> String {
+    let update = NoteLineUpdate {
+        text: remote
+            .summary
+            .clone()
+            .unwrap_or_else(|| "Untitled event".to_string()),
+        schedule: schedule_from_remote_event(remote),
+    };
+    event_hash_from_update(&update)
 }
 
 fn schedule_signature(schedule: &TaskSchedule) -> String {
