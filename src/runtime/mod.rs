@@ -1,9 +1,10 @@
-use crate::{actions, app::App, integrations::google, models, storage};
+use crate::{actions, app::App, config::google_token_path, integrations::google, models, storage};
 use chrono::{Duration, Local};
 use std::sync::mpsc::TryRecvError;
 
 pub fn tick(app: &mut App) {
     handle_day_rollover(app);
+    handle_google_sync(app);
     handle_google_auth(app);
 
     if let Some(end_time) = app.pomodoro_end
@@ -48,6 +49,44 @@ pub fn tick(app: &mut App) {
         && Local::now() >= expiry
     {
         app.clear_visual_hint();
+    }
+}
+
+fn handle_google_sync(app: &mut App) {
+    let result = {
+        let Some(receiver) = app.google_sync_receiver.as_ref() else {
+            return;
+        };
+        receiver.try_recv()
+    };
+
+    match result {
+        Ok(google::SyncOutcome::Success(report)) => {
+            app.google_sync_receiver = None;
+            app.update_logs();
+            app.toast(format!("Google sync complete: {}", report.summary()));
+        }
+        Ok(google::SyncOutcome::AuthRequired(session)) => {
+            app.google_sync_receiver = None;
+            let token_path = google_token_path(&app.config);
+            app.google_auth_display = Some(session.display.clone());
+            app.show_google_auth_popup = true;
+            app.google_auth_receiver = Some(google::spawn_auth_flow_poll(
+                app.config.google.clone(),
+                session,
+                token_path,
+            ));
+            app.toast("Google auth required. Follow the popup instructions.");
+        }
+        Ok(google::SyncOutcome::Error(message)) => {
+            app.google_sync_receiver = None;
+            app.toast(message);
+        }
+        Err(TryRecvError::Empty) => {}
+        Err(TryRecvError::Disconnected) => {
+            app.google_sync_receiver = None;
+            app.toast("Google sync stopped.");
+        }
     }
 }
 

@@ -171,7 +171,7 @@ You can also open the active config directly inside MemoLog:
 ### Google sync (Calendar + Tasks)
 
 MemoLog can sync tasks and scheduled notes with Google Tasks + Calendar (two-way).
-This uses OAuth device flow and stores tokens locally.
+This uses a local browser redirect (temporary localhost listener) and stores tokens locally.
 
 1) Prepare Google Cloud
 - Create a Google Cloud project
@@ -204,7 +204,8 @@ Notes:
 3) Authorize and sync
 - Launch MemoLog
 - Press `Ctrl+G`
-- Open the URL shown in the popup, enter the code, and approve access
+- Open the URL shown in the popup and approve access
+- The browser will redirect to localhost and MemoLog will finish the login
 
 What syncs
 - Tasks: Markdown checkboxes are synced to Google Tasks.

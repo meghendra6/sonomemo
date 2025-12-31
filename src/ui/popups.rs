@@ -727,35 +727,28 @@ pub fn render_google_auth_popup(f: &mut Frame, app: &App) {
                 remaining_seconds % 60
             )
         } else {
-            "Code expired. Press Esc and try again.".to_string()
+            "Authorization expired. Press Esc and try again.".to_string()
         };
 
         lines.push(Line::from(Span::raw(
-            "Open this URL and enter the code:",
+            "Open this local URL in your browser:",
         )));
         lines.push(Line::from(Span::styled(
-            display.verification_url.as_str(),
+            display.local_url.as_str(),
             Style::default()
                 .fg(tokens.ui_accent)
                 .add_modifier(Modifier::BOLD),
         )));
         lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::styled("Code: ", Style::default().fg(tokens.ui_muted)),
-            Span::styled(
-                display.user_code.as_str(),
-                Style::default()
-                    .fg(tokens.ui_accent)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]));
         lines.push(Line::from(Span::styled(
-            remaining_text,
+            format!(
+                "This will redirect to Google and back to {}",
+                display.listen_addr
+            ),
             Style::default().fg(tokens.ui_muted),
         )));
-        lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
-            "Waiting for authorization…",
+            remaining_text,
             Style::default().fg(tokens.ui_muted),
         )));
     } else {

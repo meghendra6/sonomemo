@@ -1,6 +1,6 @@
 use crate::{
     app::App,
-    config::{EditorStyle, ThemePreset, config_path, google_token_path},
+    config::{EditorStyle, ThemePreset, config_path},
     integrations::google,
     models::{self, Priority},
     storage,
@@ -102,27 +102,13 @@ pub fn sync_google(app: &mut App) {
         return;
     }
 
-    match google::sync(&app.config) {
-        Ok(report) => {
-            app.google_auth_display = None;
-            app.update_logs();
-            app.toast(format!("Google sync complete: {}", report.summary()));
-        }
-        Err(google::SyncError::AuthRequired(session)) => {
-            let token_path = google_token_path(&app.config);
-            app.google_auth_display = Some(session.display.clone());
-            app.show_google_auth_popup = true;
-            app.google_auth_receiver = Some(google::spawn_device_flow_poll(
-                app.config.google.clone(),
-                session,
-                token_path,
-            ));
-            app.toast("Google auth required. Follow the popup instructions.");
-        }
-        Err(err) => {
-            app.toast(err.message());
-        }
+    if app.google_sync_receiver.is_some() {
+        app.toast("Google sync already running.");
+        return;
     }
+
+    app.toast("Starting Google sync...");
+    app.google_sync_receiver = Some(google::spawn_sync(app.config.clone()));
 }
 
 pub fn open_config_in_composer(app: &mut App) {
