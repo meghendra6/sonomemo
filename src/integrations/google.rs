@@ -832,42 +832,57 @@ fn sync_tasks(
         match (stored, remote) {
             (Some(entry), Some(remote)) => {
                 let local_changed = entry.hash != hash;
+                let remote_hash = task_hash_from_remote(remote);
                 let remote_updated = remote.updated.clone();
-                let remote_changed = entry.remote_updated != remote_updated;
+                let remote_changed = entry.hash != remote_hash;
 
                 match (local_changed, remote_changed) {
                     (true, true) => {
-                        report.conflicts += 1;
-                        match policy {
-                            ConflictPolicy::PreferLocal => {
-                                let updated = update_remote_task(
-                                    client,
-                                    access_token,
-                                    &config.google.tasks_list_id,
-                                    &entry.google_id,
-                                    item,
-                                )?;
-                                report.tasks_updated += 1;
-                                state.tasks.insert(
-                                    key,
-                                    SyncItem {
-                                        google_id: entry.google_id,
-                                        hash,
-                                        remote_updated: updated.updated.clone().or(remote_updated),
-                                    },
-                                );
-                            }
-                            ConflictPolicy::PreferRemote => {
-                                let applied = apply_remote_task_update(item, remote)?;
-                                report.tasks_imported += 1;
-                                state.tasks.insert(
-                                    key,
-                                    SyncItem {
-                                        google_id: entry.google_id,
-                                        hash: task_hash_from_update(&applied),
-                                        remote_updated: remote_updated.clone(),
-                                    },
-                                );
+                        if hash == remote_hash {
+                            state.tasks.insert(
+                                key,
+                                SyncItem {
+                                    google_id: entry.google_id,
+                                    hash,
+                                    remote_updated: remote_updated.clone(),
+                                },
+                            );
+                        } else {
+                            report.conflicts += 1;
+                            match policy {
+                                ConflictPolicy::PreferLocal => {
+                                    let updated = update_remote_task(
+                                        client,
+                                        access_token,
+                                        &config.google.tasks_list_id,
+                                        &entry.google_id,
+                                        item,
+                                    )?;
+                                    report.tasks_updated += 1;
+                                    state.tasks.insert(
+                                        key,
+                                        SyncItem {
+                                            google_id: entry.google_id,
+                                            hash,
+                                            remote_updated: updated
+                                                .updated
+                                                .clone()
+                                                .or(remote_updated),
+                                        },
+                                    );
+                                }
+                                ConflictPolicy::PreferRemote => {
+                                    let applied = apply_remote_task_update(item, remote)?;
+                                    report.tasks_imported += 1;
+                                    state.tasks.insert(
+                                        key,
+                                        SyncItem {
+                                            google_id: entry.google_id,
+                                            hash: task_hash_from_update(&applied),
+                                            remote_updated: remote_updated.clone(),
+                                        },
+                                    );
+                                }
                             }
                         }
                     }
@@ -901,7 +916,18 @@ fn sync_tasks(
                             },
                         );
                     }
-                    (false, false) => {}
+                    (false, false) => {
+                        if entry.remote_updated != remote_updated {
+                            state.tasks.insert(
+                                key,
+                                SyncItem {
+                                    google_id: entry.google_id,
+                                    hash: entry.hash,
+                                    remote_updated: remote_updated.clone(),
+                                },
+                            );
+                        }
+                    }
                 }
             }
             (Some(_entry), None) => {
@@ -1079,42 +1105,57 @@ fn sync_events(
         match (stored, remote) {
             (Some(entry), Some(remote)) => {
                 let local_changed = entry.hash != hash;
+                let remote_hash = event_hash_from_remote(remote);
                 let remote_updated = remote.updated.clone();
-                let remote_changed = entry.remote_updated != remote_updated;
+                let remote_changed = entry.hash != remote_hash;
 
                 match (local_changed, remote_changed) {
                     (true, true) => {
-                        report.conflicts += 1;
-                        match policy {
-                            ConflictPolicy::PreferLocal => {
-                                let updated = update_remote_event(
-                                    client,
-                                    access_token,
-                                    &config.google.calendar_id,
-                                    &entry.google_id,
-                                    item,
-                                )?;
-                                report.events_updated += 1;
-                                state.events.insert(
-                                    key,
-                                    SyncItem {
-                                        google_id: entry.google_id,
-                                        hash,
-                                        remote_updated: updated.updated.clone().or(remote_updated),
-                                    },
-                                );
-                            }
-                            ConflictPolicy::PreferRemote => {
-                                let applied = apply_remote_event_update(item, remote)?;
-                                report.events_imported += 1;
-                                state.events.insert(
-                                    key,
-                                    SyncItem {
-                                        google_id: entry.google_id,
-                                        hash: event_hash_from_update(&applied),
-                                        remote_updated: remote_updated.clone(),
-                                    },
-                                );
+                        if hash == remote_hash {
+                            state.events.insert(
+                                key,
+                                SyncItem {
+                                    google_id: entry.google_id,
+                                    hash,
+                                    remote_updated: remote_updated.clone(),
+                                },
+                            );
+                        } else {
+                            report.conflicts += 1;
+                            match policy {
+                                ConflictPolicy::PreferLocal => {
+                                    let updated = update_remote_event(
+                                        client,
+                                        access_token,
+                                        &config.google.calendar_id,
+                                        &entry.google_id,
+                                        item,
+                                    )?;
+                                    report.events_updated += 1;
+                                    state.events.insert(
+                                        key,
+                                        SyncItem {
+                                            google_id: entry.google_id,
+                                            hash,
+                                            remote_updated: updated
+                                                .updated
+                                                .clone()
+                                                .or(remote_updated),
+                                        },
+                                    );
+                                }
+                                ConflictPolicy::PreferRemote => {
+                                    let applied = apply_remote_event_update(item, remote)?;
+                                    report.events_imported += 1;
+                                    state.events.insert(
+                                        key,
+                                        SyncItem {
+                                            google_id: entry.google_id,
+                                            hash: event_hash_from_update(&applied),
+                                            remote_updated: remote_updated.clone(),
+                                        },
+                                    );
+                                }
                             }
                         }
                     }
@@ -1148,7 +1189,18 @@ fn sync_events(
                             },
                         );
                     }
-                    (false, false) => {}
+                    (false, false) => {
+                        if entry.remote_updated != remote_updated {
+                            state.events.insert(
+                                key,
+                                SyncItem {
+                                    google_id: entry.google_id,
+                                    hash: entry.hash,
+                                    remote_updated: remote_updated.clone(),
+                                },
+                            );
+                        }
+                    }
                 }
             }
             (Some(entry), None) => {
