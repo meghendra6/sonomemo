@@ -1522,8 +1522,8 @@ fn event_match_key(text: &str, schedule: &TaskSchedule, fallback_date: NaiveDate
     let normalized = normalize_match_text(text);
     let date = schedule
         .scheduled
-        .or(schedule.start)
         .or(schedule.due)
+        .or(schedule.start)
         .unwrap_or(fallback_date);
     let time = schedule
         .time
