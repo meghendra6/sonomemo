@@ -393,6 +393,11 @@ pub(crate) fn handle_editor_visual(app: &mut App, key: event::KeyEvent, kind: Vi
             }
             exit_visual_mode(app);
         }
+        KeyCode::Char('s') => {
+            if let Some(obj) = resolve_visual_text_object(app, kind) {
+                apply_operator(app, Operator::Change, obj);
+            }
+        }
         KeyCode::Char('d') | KeyCode::Char('x') => {
             if let Some(obj) = resolve_visual_text_object(app, kind) {
                 apply_operator(app, Operator::Delete, obj);
@@ -435,7 +440,7 @@ fn enter_visual_mode(app: &mut App, kind: VisualKind) {
         VisualKind::Block => "BLOCK",
     };
     app.show_visual_hint(format!(
-        "VISUAL ({kind_label}): hjkl/w b e extend · y yank · d delete · Esc normal · ? help"
+        "VISUAL ({kind_label}): hjkl/w b e extend · s change · y yank · d delete · Esc normal · ? help"
     ));
 }
 

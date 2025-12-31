@@ -23,14 +23,16 @@ pub fn toggle_todo_in_timeline(app: &mut App) {
         && i < app.logs.len()
     {
         let entry = &app.logs[i];
-        if entry.content.contains("- [ ]") || entry.content.contains("- [x]") {
-            let _ = storage::toggle_todo_status(entry);
-            if app.is_search_result {
-                app.update_logs(); // TODO: Maintain search, but reloading is safer
-            } else {
+        match storage::complete_entry_tasks(entry) {
+            Ok(updated) => {
+                if updated == 0 {
+                    app.toast("No open tasks in entry.");
+                    return;
+                }
                 app.update_logs();
+                app.logs_state.select(Some(i));
             }
-            app.logs_state.select(Some(i));
+            Err(_) => app.toast("Failed to complete tasks."),
         }
     }
 }
@@ -147,6 +149,27 @@ pub fn open_agenda_preview(app: &mut App) {
     };
 
     match storage::read_entry_containing_line(&item.file_path, item.line_number) {
+        Ok(Some(entry)) => {
+            app.memo_preview_entry = Some(entry);
+            app.memo_preview_scroll = 0;
+            app.show_memo_preview_popup = true;
+        }
+        Ok(None) => app.toast("Memo not found."),
+        Err(_) => app.toast("Failed to load memo."),
+    }
+}
+
+pub fn open_task_preview(app: &mut App) {
+    let Some(selected) = app.tasks_state.selected() else {
+        app.toast("No task selected.");
+        return;
+    };
+    let Some(task) = app.tasks.get(selected).cloned() else {
+        app.toast("No task selected.");
+        return;
+    };
+
+    match storage::read_entry_containing_line(&task.file_path, task.line_number) {
         Ok(Some(entry)) => {
             app.memo_preview_entry = Some(entry);
             app.memo_preview_scroll = 0;

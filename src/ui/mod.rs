@@ -1547,6 +1547,14 @@ fn compose_wrapped_line(
     content_override: Option<Vec<StyledSegment>>,
 ) -> Line<'static> {
     let mut spans: Vec<Span<'static>> = Vec::new();
+    let prefix_selected = selection.map(|range| range.start == 0).unwrap_or(false);
+    let prefix_style = if prefix_selected {
+        Style::default()
+            .fg(tokens.ui_muted)
+            .bg(tokens.ui_selection_bg)
+    } else {
+        Style::default().fg(tokens.ui_muted)
+    };
 
     // Only show line number on first wrapped segment
     if show_line_numbers {
@@ -1556,23 +1564,20 @@ fn compose_wrapped_line(
                 logical_line_number + 1,
                 width = LINE_NUMBER_WIDTH
             );
-            spans.push(Span::styled(label, Style::default().fg(tokens.ui_muted)));
+            spans.push(Span::styled(label, prefix_style));
         } else {
             // Continuation line: show spaces instead of line number
             let label = format!("{:>width$} ", "", width = LINE_NUMBER_WIDTH);
-            spans.push(Span::styled(label, Style::default().fg(tokens.ui_muted)));
+            spans.push(Span::styled(label, prefix_style));
         }
     }
 
     // Line marker (only on first wrap) or continuation marker
     if is_first_wrap {
-        spans.push(Span::styled(
-            LINE_MARKER,
-            Style::default().fg(tokens.ui_muted),
-        ));
+        spans.push(Span::styled(LINE_MARKER, prefix_style));
     } else {
         // Use a wrap continuation indicator
-        spans.push(Span::styled("↪ ", Style::default().fg(tokens.ui_muted)));
+        spans.push(Span::styled("↪ ", prefix_style));
     }
 
     let content_segments: Vec<StyledSegment> = if let Some(segments) = content_override {

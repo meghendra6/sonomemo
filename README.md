@@ -284,7 +284,7 @@ Timeline
 - `Tab` fold entry
 - `Shift+Tab` cycle fold mode
 - `e` edit entry
-- `Space` toggle checkbox
+- `Space` complete tasks
 
 Agenda
 - `j/k` move
@@ -298,6 +298,7 @@ Agenda
 Tasks
 - `j/k` move
 - `Space` toggle checkbox
+- `Enter` memo preview
 - `Shift+P` cycle priority
 - `p` pomodoro
 - `e` edit source

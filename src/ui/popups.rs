@@ -819,7 +819,7 @@ pub fn render_help_popup(f: &mut Frame, app: &App) {
                 ("Fold toggle", fmt_keys(&kb.timeline.fold_toggle)),
                 ("Fold cycle", fmt_keys(&kb.timeline.fold_cycle)),
                 ("Edit", fmt_keys(&kb.timeline.edit)),
-                ("Toggle checkbox", fmt_keys(&kb.timeline.toggle_todo)),
+                ("Complete tasks", fmt_keys(&kb.timeline.toggle_todo)),
             ],
         ),
         (
@@ -844,6 +844,7 @@ pub fn render_help_popup(f: &mut Frame, app: &App) {
                 ("Up", fmt_keys(&kb.tasks.up)),
                 ("Down", fmt_keys(&kb.tasks.down)),
                 ("Toggle", fmt_keys(&kb.tasks.toggle)),
+                ("Open memo", fmt_keys(&kb.tasks.open)),
                 ("Priority cycle", fmt_keys(&kb.tasks.priority_cycle)),
                 ("Pomodoro", fmt_keys(&kb.tasks.start_pomodoro)),
                 ("Edit", fmt_keys(&kb.tasks.edit)),
@@ -982,6 +983,9 @@ fn visual_help_lines(kind: VisualKind, tokens: &ThemeTokens) -> Vec<Line<'static
         Line::from(vec![
             Span::styled("Actions", label_style),
             Span::raw(" "),
+            Span::styled("s", key_style),
+            Span::styled(" change", label_style),
+            Span::raw("  "),
             Span::styled("y", key_style),
             Span::styled(" yank", label_style),
             Span::raw("  "),

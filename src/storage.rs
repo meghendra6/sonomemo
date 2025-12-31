@@ -975,8 +975,32 @@ pub fn complete_task_chain(log_path: &Path, task: &TaskItem) -> io::Result<usize
     Ok(completed_count)
 }
 
-pub fn toggle_todo_status(entry: &LogEntry) -> io::Result<()> {
-    toggle_task_status(&entry.file_path, entry.line_number)
+pub fn complete_entry_tasks(entry: &LogEntry) -> io::Result<usize> {
+    let content = fs::read_to_string(&entry.file_path)?;
+    let mut lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
+
+    if entry.line_number >= lines.len() {
+        return Ok(0);
+    }
+
+    let end_line = entry.end_line.min(lines.len().saturating_sub(1));
+    let mut updated = 0usize;
+    for line in lines.iter_mut().take(end_line + 1).skip(entry.line_number) {
+        if let Some(new_line) = mark_task_completed_line(line) {
+            *line = new_line;
+            updated += 1;
+        }
+    }
+
+    if updated > 0 {
+        let mut new_content = lines.join("\n");
+        if !new_content.ends_with('\n') {
+            new_content.push('\n');
+        }
+        fs::write(&entry.file_path, new_content)?;
+    }
+
+    Ok(updated)
 }
 
 pub fn replace_entry_lines(

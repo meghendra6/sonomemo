@@ -151,6 +151,10 @@ pub fn handle_normal_mode(app: &mut App, key: KeyEvent) {
     {
         app.set_task_filter(models::TaskFilter::All);
     } else if app.navigate_focus == models::NavigateFocus::Tasks
+        && key_match(&key, &app.config.keybindings.tasks.open)
+    {
+        actions::open_task_preview(app);
+    } else if app.navigate_focus == models::NavigateFocus::Tasks
         && key_match(&key, &app.config.keybindings.tasks.edit)
     {
         if let Some(i) = app.tasks_state.selected()
