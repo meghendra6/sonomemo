@@ -1047,12 +1047,17 @@ fn sync_events(
             anchor_date,
         );
         remote_match.entry(key).or_default().push(item.clone());
-        let text_key = normalize_match_text(item.summary.as_deref().unwrap_or("Untitled event"));
+        let text_key = normalize_match_text(&normalize_event_text(
+            item.summary.as_deref().unwrap_or("Untitled event"),
+        ));
         remote_text_match.entry(text_key).or_default().push(item.clone());
     }
 
     for item in local_items {
         if item.kind == AgendaItemKind::Task && is_carryover_task_text(&item.text) {
+            continue;
+        }
+        if item.kind == AgendaItemKind::Task && item.schedule.is_empty() {
             continue;
         }
         let key = local_event_key(item);
@@ -1077,7 +1082,7 @@ fn sync_events(
                 stored = Some(entry);
                 remote = remote_by_id.get(&matched_remote.id);
             } else if !out_of_range {
-                let text_key = normalize_match_text(&item.text);
+                let text_key = normalize_match_text(&normalize_event_text(&item.text));
                 if let Some(matched_remote) =
                     take_unique_match(&mut remote_text_match, &text_key)
                 {
@@ -1485,7 +1490,7 @@ fn update_remote_event(
     let url = format!("{CALENDAR_API}/calendars/{calendar_id}/events/{event_id}");
     let (start, end) = schedule_to_event_times_patch(&item.schedule, item.date);
     let update = EventUpdatePatchRequest {
-        summary: item.text.clone(),
+        summary: event_summary_text(&item.text),
         start,
         end,
     };
@@ -1523,7 +1528,7 @@ fn create_remote_event(
     let url = format!("{CALENDAR_API}/calendars/{calendar_id}/events");
     let (start, end) = schedule_to_event_times(&item.schedule, item.date);
     let update = EventUpdateRequest {
-        summary: item.text.clone(),
+        summary: event_summary_text(&item.text),
         start,
         end,
     };
@@ -1554,21 +1559,27 @@ fn apply_remote_event_update(
     remote: &RemoteEvent,
 ) -> Result<NoteLineUpdate, SyncError> {
     let schedule = schedule_from_remote_event(remote);
-    let update = NoteLineUpdate {
-        text: remote
-            .summary
-            .clone()
-            .unwrap_or_else(|| local.text.clone()),
-        schedule: schedule.clone(),
-    };
-    storage::update_note_line(&local.file_path, local.line_number, update)?;
-    Ok(NoteLineUpdate {
-        text: remote
-            .summary
-            .clone()
-            .unwrap_or_else(|| local.text.clone()),
-        schedule,
-    })
+    let raw_text = remote.summary.clone().unwrap_or_else(|| local.text.clone());
+    let text = normalize_event_text(&raw_text);
+    match local.kind {
+        AgendaItemKind::Task => {
+            let update = TaskLineUpdate {
+                text: text.clone(),
+                is_done: local.is_done,
+                priority: local.priority,
+                schedule: schedule.clone(),
+            };
+            storage::update_task_line(&local.file_path, local.line_number, update)?;
+        }
+        _ => {
+            let update = NoteLineUpdate {
+                text: text.clone(),
+                schedule: schedule.clone(),
+            };
+            storage::update_note_line(&local.file_path, local.line_number, update)?;
+        }
+    }
+    Ok(NoteLineUpdate { text, schedule })
 }
 
 fn local_task_key(item: &AgendaItem) -> String {
@@ -1660,6 +1671,48 @@ fn normalize_match_text(text: &str) -> String {
     text.trim().to_lowercase()
 }
 
+fn normalize_event_text(text: &str) -> String {
+    let trimmed = text.trim();
+    let trimmed = strip_task_checkbox_prefix(trimmed);
+    let trimmed = strip_list_prefix(trimmed);
+    trimmed.trim().to_string()
+}
+
+fn strip_task_checkbox_prefix(text: &str) -> &str {
+    if let Some(rest) = text.strip_prefix("- [ ] ") {
+        return rest;
+    }
+    if let Some(rest) = text.strip_prefix("- [x] ") {
+        return rest;
+    }
+    if let Some(rest) = text.strip_prefix("- [X] ") {
+        return rest;
+    }
+    text
+}
+
+fn strip_list_prefix(text: &str) -> &str {
+    if let Some(rest) = text.strip_prefix("- ") {
+        return rest;
+    }
+    if let Some(rest) = text.strip_prefix("* ") {
+        return rest;
+    }
+    if let Some(rest) = text.strip_prefix("+ ") {
+        return rest;
+    }
+    text
+}
+
+fn event_summary_text(text: &str) -> String {
+    let normalized = normalize_event_text(text);
+    if normalized.is_empty() {
+        "Untitled event".to_string()
+    } else {
+        normalized
+    }
+}
+
 fn task_match_key(text: &str, schedule: &TaskSchedule) -> String {
     let normalized = normalize_match_text(text);
     let due = schedule_to_task_due(schedule).unwrap_or_default();
@@ -1667,7 +1720,7 @@ fn task_match_key(text: &str, schedule: &TaskSchedule) -> String {
 }
 
 fn event_match_key(text: &str, schedule: &TaskSchedule, fallback_date: NaiveDate) -> String {
-    let normalized = normalize_match_text(text);
+    let normalized = normalize_match_text(&normalize_event_text(text));
     let date = schedule
         .scheduled
         .or(schedule.due)
@@ -1705,7 +1758,8 @@ fn task_hash(item: &AgendaItem) -> String {
 
 fn event_hash(item: &AgendaItem) -> String {
     let schedule = schedule_signature(&item.schedule);
-    stable_hash(&format!("{}|{}", item.text, schedule))
+    let text = normalize_event_text(&item.text);
+    stable_hash(&format!("{}|{}", text, schedule))
 }
 
 fn task_hash_from_update(update: &TaskLineUpdate) -> String {
@@ -1719,7 +1773,8 @@ fn task_hash_from_update(update: &TaskLineUpdate) -> String {
 
 fn event_hash_from_update(update: &NoteLineUpdate) -> String {
     let schedule = schedule_signature(&update.schedule);
-    stable_hash(&format!("{}|{}", update.text, schedule))
+    let text = normalize_event_text(&update.text);
+    stable_hash(&format!("{}|{}", text, schedule))
 }
 
 fn task_hash_from_remote(remote: &RemoteTask) -> String {
