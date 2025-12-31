@@ -1000,26 +1000,29 @@ fn sync_events(
                 state.events.insert(key.clone(), entry.clone());
                 stored = Some(entry);
                 remote = remote_by_id.get(&matched_remote.id);
-            } else if let Some(matched_remote) =
-                take_unique_match(&mut remote_text_match, &normalize_match_text(&item.text))
-            {
-                let schedule = schedule_from_remote_event(&matched_remote);
-                let anchor_date = schedule_anchor_date(&schedule)
-                    .unwrap_or_else(|| Local::now().date_naive());
-                let strict_key = event_match_key(
-                    matched_remote.summary.as_deref().unwrap_or("Untitled event"),
-                    &schedule,
-                    anchor_date,
-                );
-                remove_event_match(&mut remote_match, &strict_key, &matched_remote.id);
-                let entry = SyncItem {
-                    google_id: matched_remote.id.clone(),
-                    hash: event_hash_from_remote(&matched_remote),
-                    remote_updated: matched_remote.updated.clone(),
-                };
-                state.events.insert(key.clone(), entry.clone());
-                stored = Some(entry);
-                remote = remote_by_id.get(&matched_remote.id);
+            } else if !out_of_range {
+                let text_key = normalize_match_text(&item.text);
+                if let Some(matched_remote) =
+                    take_unique_match(&mut remote_text_match, &text_key)
+                {
+                    let schedule = schedule_from_remote_event(&matched_remote);
+                    let anchor_date = schedule_anchor_date(&schedule)
+                        .unwrap_or_else(|| Local::now().date_naive());
+                    let strict_key = event_match_key(
+                        matched_remote.summary.as_deref().unwrap_or("Untitled event"),
+                        &schedule,
+                        anchor_date,
+                    );
+                    remove_event_match(&mut remote_match, &strict_key, &matched_remote.id);
+                    let entry = SyncItem {
+                        google_id: matched_remote.id.clone(),
+                        hash: event_hash_from_remote(&matched_remote),
+                        remote_updated: matched_remote.updated.clone(),
+                    };
+                    state.events.insert(key.clone(), entry.clone());
+                    stored = Some(entry);
+                    remote = remote_by_id.get(&matched_remote.id);
+                }
             }
         }
 
