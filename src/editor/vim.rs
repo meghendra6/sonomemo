@@ -2,6 +2,7 @@ use crate::{
     app::{App, PendingEditCommand},
     config::key_match,
     editor::markdown,
+    input::editing,
     models::{EditorMode, VisualKind},
 };
 use crossterm::event::{self, KeyCode, KeyModifiers};
@@ -186,6 +187,9 @@ pub(crate) fn handle_editor_normal(app: &mut App, key: event::KeyEvent) {
         }
         KeyCode::Char('g') => {
             app.pending_command = Some(PendingEditCommand::GoToTop);
+        }
+        KeyCode::Char('Z') => {
+            app.pending_command = Some(PendingEditCommand::ZCommand);
         }
         KeyCode::Char('G') => {
             let count = take_count(app);
@@ -459,6 +463,10 @@ fn handle_pending_command(app: &mut App, key: event::KeyEvent) -> bool {
 
     match pending {
         PendingEditCommand::Delete => {
+            if key.code == KeyCode::Char('i') {
+                app.pending_command = Some(PendingEditCommand::DeleteInner);
+                return true;
+            }
             if key.code == KeyCode::Char('d') {
                 let count = take_count_or_one(app);
                 if let Some(obj) = resolve_line_object(app, count) {
@@ -469,6 +477,10 @@ fn handle_pending_command(app: &mut App, key: event::KeyEvent) -> bool {
             }
         }
         PendingEditCommand::Yank => {
+            if key.code == KeyCode::Char('i') {
+                app.pending_command = Some(PendingEditCommand::YankInner);
+                return true;
+            }
             if key.code == KeyCode::Char('y') {
                 let count = take_count_or_one(app);
                 if let Some(obj) = resolve_line_object(app, count) {
@@ -479,6 +491,10 @@ fn handle_pending_command(app: &mut App, key: event::KeyEvent) -> bool {
             }
         }
         PendingEditCommand::Change => {
+            if key.code == KeyCode::Char('i') {
+                app.pending_command = Some(PendingEditCommand::ChangeInner);
+                return true;
+            }
             if key.code == KeyCode::Char('c') {
                 let count = take_count_or_one(app);
                 if let Some(obj) = resolve_line_object(app, count) {
@@ -508,6 +524,53 @@ fn handle_pending_command(app: &mut App, key: event::KeyEvent) -> bool {
                     app.composer_dirty = true;
                 }
                 return true;
+            }
+        }
+        PendingEditCommand::DeleteInner => {
+            if key.code == KeyCode::Char('w') {
+                let count = take_count_or_one(app);
+                if let Some(obj) = resolve_inner_word_object(app, count) {
+                    apply_operator(app, Operator::Delete, obj);
+                }
+                app.pending_command = None;
+                return true;
+            }
+        }
+        PendingEditCommand::YankInner => {
+            if key.code == KeyCode::Char('w') {
+                let count = take_count_or_one(app);
+                if let Some(obj) = resolve_inner_word_object(app, count) {
+                    apply_operator(app, Operator::Yank, obj);
+                }
+                app.pending_command = None;
+                return true;
+            }
+        }
+        PendingEditCommand::ChangeInner => {
+            if key.code == KeyCode::Char('w') {
+                let count = take_count_or_one(app);
+                if let Some(obj) = resolve_inner_word_object(app, count) {
+                    apply_operator(app, Operator::Change, obj);
+                }
+                app.pending_command = None;
+                return true;
+            }
+        }
+        PendingEditCommand::ZCommand => {
+            match key.code {
+                KeyCode::Char('Z') => {
+                    app.pending_command = None;
+                    app.pending_count = 0;
+                    editing::submit_composer(app);
+                    return true;
+                }
+                KeyCode::Char('Q') => {
+                    app.pending_command = None;
+                    app.pending_count = 0;
+                    editing::discard_composer(app);
+                    return true;
+                }
+                _ => {}
             }
         }
     }
@@ -745,6 +808,77 @@ fn resolve_char_object(app: &App, count: usize) -> Option<TextObject> {
     Some(TextObject::Range {
         kind: TextObjectKind::Char,
         start: (row, col),
+        end,
+    })
+}
+
+fn resolve_inner_word_object(app: &App, count: usize) -> Option<TextObject> {
+    let lines = app.textarea.lines();
+    if lines.is_empty() {
+        return None;
+    }
+    let mut pos = app.textarea.cursor();
+    if line_len(lines, pos.0) == 0 {
+        return None;
+    }
+
+    let mut kind = kind_at(lines, pos, false);
+    if kind == WordKind::Whitespace {
+        let next = next_word_start(lines, pos, false);
+        if next == pos {
+            return None;
+        }
+        pos = next;
+        kind = kind_at(lines, pos, false);
+        if kind == WordKind::Whitespace {
+            return None;
+        }
+    }
+
+    let mut start = pos;
+    while let Some(prev) = prev_pos(lines, start) {
+        if kind_at(lines, prev, false) == kind {
+            start = prev;
+        } else {
+            break;
+        }
+    }
+
+    let mut end_pos = pos;
+    while let Some(next) = next_pos(lines, end_pos) {
+        if kind_at(lines, next, false) == kind {
+            end_pos = next;
+        } else {
+            break;
+        }
+    }
+
+    let mut end = next_pos(lines, end_pos).unwrap_or((end_pos.0, end_pos.1.saturating_add(1)));
+    let mut remaining = count.saturating_sub(1);
+    while remaining > 0 {
+        let next_start = next_word_start(lines, end, false);
+        if next_start == end {
+            break;
+        }
+        let next_kind = kind_at(lines, next_start, false);
+        if next_kind == WordKind::Whitespace {
+            break;
+        }
+        let mut next_end = next_start;
+        while let Some(next) = next_pos(lines, next_end) {
+            if kind_at(lines, next, false) == next_kind {
+                next_end = next;
+            } else {
+                break;
+            }
+        }
+        end = next_pos(lines, next_end).unwrap_or((next_end.0, next_end.1.saturating_add(1)));
+        remaining = remaining.saturating_sub(1);
+    }
+
+    Some(TextObject::Range {
+        kind: TextObjectKind::Char,
+        start,
         end,
     })
 }

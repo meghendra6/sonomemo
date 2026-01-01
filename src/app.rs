@@ -48,6 +48,10 @@ pub enum PendingEditCommand {
     GoToTop,
     Replace,
     Change,
+    ZCommand,
+    DeleteInner,
+    YankInner,
+    ChangeInner,
 }
 
 pub struct App<'a> {

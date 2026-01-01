@@ -105,6 +105,9 @@ Insert mode shortcuts:
 Normal/Visual mode:
 
 - Arrow keys move the cursor (in addition to `h/j/k/l`)
+- `ZZ` save and exit (Vim)
+- `ZQ` discard and exit (Vim)
+- `ciw`/`diw`/`yiw` change/delete/yank inner word
 
 ## Task priorities
 
