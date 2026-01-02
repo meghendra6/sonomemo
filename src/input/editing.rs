@@ -41,6 +41,28 @@ pub fn handle_editing_mode(app: &mut App, key: KeyEvent) {
         return;
     }
 
+    if app.is_vim_mode() && matches!(app.editor_mode, EditorMode::Normal) {
+        if key_match(&key, &app.config.keybindings.composer.task_toggle) {
+            let snapshot = app.editor_snapshot();
+            if markdown::toggle_task_checkbox(&mut app.textarea) {
+                app.editor_undo.push(snapshot);
+                app.editor_redo.clear();
+                app.composer_dirty = true;
+            }
+            return;
+        }
+
+        if key_match(&key, &app.config.keybindings.composer.priority_cycle) {
+            let snapshot = app.editor_snapshot();
+            if markdown::cycle_task_priority(&mut app.textarea) {
+                app.editor_undo.push(snapshot);
+                app.editor_redo.clear();
+                app.composer_dirty = true;
+            }
+            return;
+        }
+    }
+
     // Simple mode: no Vim keybindings, just forward to textarea
     if !app.is_vim_mode() {
         if key_match(&key, &app.config.keybindings.composer.clear) {
