@@ -228,7 +228,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                     ("P", Style::default().fg(tokens.ui_muted))
                 }
             };
-            let marker_width = 3;
+            let marker_width = 4;
             let mut displayed_raw = 0usize;
 
             for (line_idx, raw_line) in entry.content.lines().enumerate() {
@@ -346,6 +346,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                         fold_text,
                         Style::default().fg(tokens.ui_muted),
                     ));
+                    spans.push(Span::raw(" "));
                     if let Some(segments) = code_segments.as_ref() {
                         let segment_len = wline.chars().count();
                         let (code_spans, consumed_len) = code_spans_for_wrapped_line(
