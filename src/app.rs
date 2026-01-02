@@ -354,6 +354,7 @@ impl<'a> App<'a> {
         let mut lines: Vec<String> =
             storage::read_lines_range(&entry.file_path, entry.line_number, entry.end_line)
                 .unwrap_or_else(|_| entry.content.lines().map(|s| s.to_string()).collect());
+        lines = strip_fold_markers_from_lines(&lines);
         if lines.is_empty() {
             return;
         }
@@ -1544,9 +1545,9 @@ fn apply_context_tag_to_lines(lines: &mut Vec<String>, context: TimelineFilter) 
         .iter()
         .enumerate()
         .skip(start_idx)
-        .find(|(_, line)| !line.trim().is_empty())
+        .find(|(_, line)| !line.trim().is_empty() && parse_fold_marker(line).is_none())
         .map(|(idx, _)| idx)
-        .unwrap_or(start_idx);
+        .unwrap_or(lines.len());
 
     if insert_idx >= lines.len() {
         lines.push(tag.to_string());
@@ -1587,29 +1588,65 @@ fn strip_fold_markers(content: &str) -> (Option<FoldOverride>, String) {
     let mut override_state = None;
     let mut lines = Vec::new();
     for line in content.lines() {
-        if let Some(state) = parse_fold_marker(line) {
+        if let Some((state, cleaned)) = parse_fold_marker(line) {
             override_state = Some(state);
+            if let Some(cleaned) = cleaned {
+                lines.push(cleaned);
+            }
             continue;
         }
-        lines.push(line);
+        lines.push(line.to_string());
     }
     (override_state, lines.join("\n"))
 }
 
-fn parse_fold_marker(line: &str) -> Option<FoldOverride> {
-    let trimmed = line.trim();
-    let Some(inner) = trimmed
-        .strip_prefix("<!--")
-        .and_then(|rest| rest.strip_suffix("-->"))
-    else {
-        return None;
+fn parse_fold_marker(line: &str) -> Option<(FoldOverride, Option<String>)> {
+    let start = line.find("<!--")?;
+    let end_rel = line[start + 4..].find("-->")?;
+    let end = start + 4 + end_rel;
+    let inner = line[start + 4..end].trim();
+    let state = match inner {
+        "memolog:expanded" => FoldOverride::Expanded,
+        "memolog:folded" | "memolog:collapsed" => FoldOverride::Folded,
+        _ => return None,
     };
-    let marker = inner.trim();
-    match marker {
-        "memolog:expanded" => Some(FoldOverride::Expanded),
-        "memolog:folded" | "memolog:collapsed" => Some(FoldOverride::Folded),
-        _ => None,
+    let after_start = end + 3;
+    let before = &line[..start];
+    let after = line.get(after_start..).unwrap_or("");
+    let before_ends_ws = before
+        .chars()
+        .last()
+        .map(|c| c.is_whitespace())
+        .unwrap_or(true);
+    let after = if before_ends_ws {
+        after.trim_start_matches(|c: char| c.is_whitespace())
+    } else {
+        after
+    };
+    let mut cleaned = String::with_capacity(line.len());
+    cleaned.push_str(before);
+    cleaned.push_str(after);
+    let cleaned = cleaned.trim_end();
+    let cleaned = if cleaned.trim().is_empty() {
+        None
+    } else {
+        Some(cleaned.to_string())
+    };
+    Some((state, cleaned))
+}
+
+fn strip_fold_markers_from_lines(lines: &[String]) -> Vec<String> {
+    let mut cleaned = Vec::with_capacity(lines.len());
+    for line in lines {
+        if let Some((_, remainder)) = parse_fold_marker(line) {
+            if let Some(remainder) = remainder {
+                cleaned.push(remainder);
+            }
+        } else {
+            cleaned.push(line.clone());
+        }
     }
+    cleaned
 }
 
 fn count_distinct_entry_dates(entries: &[LogEntry]) -> usize {
