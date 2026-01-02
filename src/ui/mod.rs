@@ -458,6 +458,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             "{} · {} · 🍅 {}",
             focus_info, task_summary, app.today_tomatoes
         );
+        let context_summary = format!("Context: {}", app.timeline_filter_label());
 
         let pomodoro = if let Some(end_time) = app.pomodoro_end {
             let now = Local::now();
@@ -522,7 +523,10 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             parts.join(" · ")
         } else {
             let time = Local::now().format("%Y-%m-%d %H:%M");
-            let base = format!("{} · Entries {} · {}", time, app.logs.len(), stats_summary);
+            let base = format!(
+                "{} · Entries {} · {} · {}",
+                time, app.logs.len(), context_summary, stats_summary
+            );
             format!("{base}{pomodoro}")
         };
 

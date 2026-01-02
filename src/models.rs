@@ -45,6 +45,14 @@ pub enum TaskFilter {
     All,
 }
 
+#[derive(Clone, Copy, PartialEq, Default)]
+pub enum TimelineFilter {
+    #[default]
+    All,
+    Work,
+    Personal,
+}
+
 #[derive(Clone, Copy, PartialEq)]
 pub enum Mood {
     Happy,
