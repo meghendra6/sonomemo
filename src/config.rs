@@ -374,6 +374,13 @@ pub struct TimelineBindings {
     pub page_down: Vec<String>,
     pub top: Vec<String>,
     pub bottom: Vec<String>,
+    pub filter_toggle: Vec<String>,
+    pub filter_work: Vec<String>,
+    pub filter_personal: Vec<String>,
+    pub filter_all: Vec<String>,
+    pub context_work: Vec<String>,
+    pub context_personal: Vec<String>,
+    pub context_clear: Vec<String>,
     pub fold_toggle: Vec<String>,
     pub fold_cycle: Vec<String>,
     pub toggle_todo: Vec<String>,
@@ -391,6 +398,13 @@ impl Default for TimelineBindings {
             page_down: vec!["ctrl+d".to_string(), "pagedown".to_string()],
             top: vec!["home".to_string()],
             bottom: vec!["end".to_string()],
+            filter_toggle: vec!["f".to_string()],
+            filter_work: vec!["1".to_string()],
+            filter_personal: vec!["2".to_string()],
+            filter_all: vec!["3".to_string()],
+            context_work: vec!["ctrl+w".to_string()],
+            context_personal: vec!["ctrl+e".to_string()],
+            context_clear: vec!["ctrl+r".to_string()],
             fold_toggle: vec!["tab".to_string()],
             fold_cycle: vec!["backtab".to_string()],
             toggle_todo: vec!["space".to_string()],
@@ -481,6 +495,9 @@ pub struct ComposerBindings {
     pub task_toggle: Vec<String>,
     pub priority_cycle: Vec<String>,
     pub date_picker: Vec<String>,
+    pub context_work: Vec<String>,
+    pub context_personal: Vec<String>,
+    pub context_clear: Vec<String>,
 }
 
 impl Default for ComposerBindings {
@@ -495,6 +512,9 @@ impl Default for ComposerBindings {
             task_toggle: vec!["ctrl+t".to_string()],
             priority_cycle: vec!["ctrl+p".to_string()],
             date_picker: vec!["ctrl+;".to_string()],
+            context_work: vec!["ctrl+w".to_string()],
+            context_personal: vec!["ctrl+e".to_string()],
+            context_clear: vec!["ctrl+r".to_string()],
         }
     }
 }
@@ -945,6 +965,36 @@ impl Config {
             changed = true;
         }
 
+        let migrated_timeline = migrate_single_binding(
+            &mut self.keybindings.timeline.context_work,
+            "alt+w",
+            "ctrl+w",
+        ) | migrate_single_binding(
+            &mut self.keybindings.timeline.context_personal,
+            "alt+p",
+            "ctrl+e",
+        ) | migrate_single_binding(
+            &mut self.keybindings.timeline.context_clear,
+            "alt+c",
+            "ctrl+r",
+        );
+        let migrated_composer = migrate_single_binding(
+            &mut self.keybindings.composer.context_work,
+            "alt+w",
+            "ctrl+w",
+        ) | migrate_single_binding(
+            &mut self.keybindings.composer.context_personal,
+            "alt+p",
+            "ctrl+e",
+        ) | migrate_single_binding(
+            &mut self.keybindings.composer.context_clear,
+            "alt+c",
+            "ctrl+r",
+        );
+        if migrated_timeline || migrated_composer {
+            changed = true;
+        }
+
         changed
     }
 }
@@ -953,6 +1003,14 @@ fn remove_keybinding(list: &mut Vec<String>, key: &str) -> bool {
     let before = list.len();
     list.retain(|k| !k.eq_ignore_ascii_case(key));
     before != list.len()
+}
+
+fn migrate_single_binding(list: &mut Vec<String>, old: &str, new: &str) -> bool {
+    if list.len() == 1 && list[0].eq_ignore_ascii_case(old) {
+        list[0] = new.to_string();
+        return true;
+    }
+    false
 }
 
 #[cfg(test)]

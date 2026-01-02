@@ -2,7 +2,7 @@ use crate::{
     app::App,
     config::key_match,
     editor::markdown,
-    models::{EditorMode, EntryIdentity, InputMode},
+    models::{EditorMode, EntryIdentity, InputMode, TimelineFilter},
     storage,
 };
 use chrono::{Duration, Local};
@@ -38,6 +38,69 @@ pub fn handle_editing_mode(app: &mut App, key: KeyEvent) {
 
     if allow_composer_shortcuts && key_match(&key, &app.config.keybindings.composer.date_picker) {
         app.open_date_picker();
+        return;
+    }
+
+    if key_match(&key, &app.config.keybindings.composer.context_work) {
+        let changed = if app.is_vim_mode() && matches!(app.editor_mode, EditorMode::Normal) {
+            let snapshot = app.editor_snapshot();
+            let changed = app.update_composer_context(TimelineFilter::Work);
+            if changed {
+                app.editor_undo.push(snapshot);
+                app.editor_redo.clear();
+            }
+            changed
+        } else {
+            app.update_composer_context(TimelineFilter::Work)
+        };
+        if changed {
+            if allow_composer_shortcuts {
+                app.mark_insert_modified();
+            }
+            app.composer_dirty = true;
+        }
+        return;
+    }
+
+    if key_match(&key, &app.config.keybindings.composer.context_personal) {
+        let changed = if app.is_vim_mode() && matches!(app.editor_mode, EditorMode::Normal) {
+            let snapshot = app.editor_snapshot();
+            let changed = app.update_composer_context(TimelineFilter::Personal);
+            if changed {
+                app.editor_undo.push(snapshot);
+                app.editor_redo.clear();
+            }
+            changed
+        } else {
+            app.update_composer_context(TimelineFilter::Personal)
+        };
+        if changed {
+            if allow_composer_shortcuts {
+                app.mark_insert_modified();
+            }
+            app.composer_dirty = true;
+        }
+        return;
+    }
+
+    if key_match(&key, &app.config.keybindings.composer.context_clear) {
+        let changed = if app.is_vim_mode() && matches!(app.editor_mode, EditorMode::Normal) {
+            let snapshot = app.editor_snapshot();
+            let changed = app.update_composer_context(TimelineFilter::All);
+            if changed {
+                app.editor_undo.push(snapshot);
+                app.editor_redo.clear();
+            }
+            changed
+        } else {
+            app.update_composer_context(TimelineFilter::All)
+        };
+        if changed {
+            if allow_composer_shortcuts {
+                app.mark_insert_modified();
+            }
+            app.composer_dirty = true;
+        }
         return;
     }
 

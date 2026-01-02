@@ -206,18 +206,29 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             let total_display_lines = app.entry_display_line_count(entry);
             let visible_raw_limit = app.entry_fold_limit(entry).unwrap_or(total_display_lines);
             let is_folded = total_display_lines > visible_raw_limit;
-            let show_marker = total_display_lines > 1;
-            let fold_marker = if show_marker {
+            let show_fold_marker = total_display_lines > 1;
+            let fold_marker = if show_fold_marker {
                 if is_folded {
                     "▶"
                 } else {
                     "▼"
                 }
             } else {
-                ""
+                " "
             };
-            let marker_width = if show_marker { 2 } else { 0 };
-            let marker_padding = if show_marker { " " } else { "" };
+            let context_kind = crate::app::entry_context_kind(entry);
+            let (context_marker, context_style) = match context_kind {
+                crate::models::TimelineFilter::Work => {
+                    ("W", Style::default().fg(tokens.content_tag))
+                }
+                crate::models::TimelineFilter::Personal => {
+                    ("P", Style::default().fg(tokens.ui_muted))
+                }
+                crate::models::TimelineFilter::All => {
+                    ("P", Style::default().fg(tokens.ui_muted))
+                }
+            };
+            let marker_width = 4;
             let mut displayed_raw = 0usize;
 
             for (line_idx, raw_line) in entry.content.lines().enumerate() {
@@ -254,7 +265,12 @@ pub fn ui(f: &mut Frame, app: &mut App) {
 
                 let is_first_visible = displayed_raw == 0;
                 let wrap_width = content_width.saturating_sub(marker_width).max(1);
-                let wrapped = wrap_markdown_line(content_line, wrap_width);
+                let display_line = if line_in_code_block {
+                    content_line.to_string()
+                } else {
+                    crate::app::strip_context_tags_from_line(content_line).0
+                };
+                let wrapped = wrap_markdown_line(&display_line, wrap_width);
                 let code_segments = if line_in_code_block {
                     if is_fence {
                         Some(vec![StyledSegment {
@@ -314,18 +330,23 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                         spans.push(ts_span);
                     }
 
-                    if show_marker {
-                        let marker_text = if is_first_visible && wrap_idx == 0 {
-                            fold_marker
-                        } else {
-                            " "
-                        };
-                        spans.push(Span::styled(
-                            marker_text,
-                            Style::default().fg(tokens.ui_muted),
-                        ));
-                        spans.push(Span::raw(marker_padding));
-                    }
+                    let context_text = if is_first_visible && wrap_idx == 0 {
+                        context_marker
+                    } else {
+                        " "
+                    };
+                    spans.push(Span::styled(context_text, context_style));
+                    spans.push(Span::raw(" "));
+                    let fold_text = if is_first_visible && wrap_idx == 0 {
+                        fold_marker
+                    } else {
+                        " "
+                    };
+                    spans.push(Span::styled(
+                        fold_text,
+                        Style::default().fg(tokens.ui_muted),
+                    ));
+                    spans.push(Span::raw(" "));
                     if let Some(segments) = code_segments.as_ref() {
                         let segment_len = wline.chars().count();
                         let (code_spans, consumed_len) = code_spans_for_wrapped_line(
@@ -458,6 +479,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             "{} · {} · 🍅 {}",
             focus_info, task_summary, app.today_tomatoes
         );
+        let context_summary = format!("Context: {}", app.timeline_filter_label());
 
         let pomodoro = if let Some(end_time) = app.pomodoro_end {
             let now = Local::now();
@@ -522,7 +544,10 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             parts.join(" · ")
         } else {
             let time = Local::now().format("%Y-%m-%d %H:%M");
-            let base = format!("{} · Entries {} · {}", time, app.logs.len(), stats_summary);
+            let base = format!(
+                "{} · Entries {} · {} · {}",
+                time, app.logs.len(), context_summary, stats_summary
+            );
             format!("{base}{pomodoro}")
         };
 

@@ -2,8 +2,9 @@ use crate::config::{Config, Theme};
 use crate::integrations::google::{AuthDisplay, AuthPollResult};
 use crate::models::{
     DatePickerField, EditorMode, EntryIdentity, FoldOverride, FoldState, InputMode, LogEntry,
-    NavigateFocus, PomodoroTarget, Priority, TaskFilter, TaskItem, TaskSchedule,
-    count_trailing_tomatoes, is_heading_timestamp_line, split_timestamp_line, strip_timestamp_prefix,
+    NavigateFocus, PomodoroTarget, Priority, TaskFilter, TaskItem, TaskSchedule, TimelineFilter,
+    count_trailing_tomatoes, is_heading_timestamp_line, is_timestamped_line, split_timestamp_line,
+    strip_timestamp_prefix,
 };
 use crate::storage;
 use arboard::Clipboard;
@@ -77,6 +78,7 @@ pub struct App<'a> {
     pub visual_hint_expiry: Option<DateTime<Local>>,
     pub visual_hint_active: bool,
     pub active_date: String,
+    pub all_logs: Vec<LogEntry>,
     pub logs: Vec<LogEntry>,
     pub logs_state: ListState,
     /// UI-space list state for Timeline (includes date separators, preserves offset across frames).
@@ -88,6 +90,7 @@ pub struct App<'a> {
     pub tasks: Vec<TaskItem>,
     pub tasks_state: ListState,
     pub task_filter: TaskFilter,
+    pub timeline_filter: TimelineFilter,
     pub today_done_tasks: usize,
     pub today_tomatoes: usize,
     pub last_search_query: Option<String>,
@@ -192,15 +195,13 @@ impl<'a> App<'a> {
             .map(|e| e.max(start_date))
             .unwrap_or(start_date);
 
-        let mut logs =
+        let mut all_logs =
             storage::read_entries_for_date_range(&config.data.log_path, effective_start, today)
                 .unwrap_or_else(|_| Vec::new());
-        let fold_overrides = extract_fold_markers_from_logs(&mut logs);
-
-        let mut logs_state = ListState::default();
-        if !logs.is_empty() {
-            logs_state.select(Some(logs.len() - 1));
-        }
+        let fold_overrides = extract_fold_markers_from_logs(&mut all_logs);
+        let timeline_filter = TimelineFilter::All;
+        let logs = Vec::new();
+        let logs_state = ListState::default();
 
         let all_tasks =
             storage::read_today_tasks(&config.data.log_path).unwrap_or_else(|_| Vec::new());
@@ -263,6 +264,7 @@ impl<'a> App<'a> {
             visual_hint_expiry: None,
             visual_hint_active: false,
             active_date,
+            all_logs,
             logs,
             logs_state,
             timeline_ui_state: ListState::default(),
@@ -273,6 +275,7 @@ impl<'a> App<'a> {
             tasks: Vec::new(),
             tasks_state,
             task_filter,
+            timeline_filter,
             today_done_tasks,
             today_tomatoes,
             last_search_query: None,
@@ -341,6 +344,7 @@ impl<'a> App<'a> {
             config,
         };
 
+        app.apply_timeline_filter(true);
         app.apply_task_filter(true);
         app.refresh_agenda();
         app
@@ -350,6 +354,7 @@ impl<'a> App<'a> {
         let mut lines: Vec<String> =
             storage::read_lines_range(&entry.file_path, entry.line_number, entry.end_line)
                 .unwrap_or_else(|_| entry.content.lines().map(|s| s.to_string()).collect());
+        lines = strip_fold_markers_from_lines(&lines);
         if lines.is_empty() {
             return;
         }
@@ -409,36 +414,22 @@ impl<'a> App<'a> {
             if let Ok(logs) =
                 storage::read_entries_for_date_range(&self.config.data.log_path, start, today)
             {
-                self.logs = logs;
+                self.all_logs = logs;
                 self.is_search_result = false;
                 self.search_highlight_query = None;
                 self.search_highlight_ready_at = None;
                 self.apply_fold_markers();
-                if !self.logs.is_empty() {
-                    // Try to preserve the previous selection position
-                    let new_selection = preserve_selection
-                        .map(|i| {
-                            if i < self.logs.len() {
-                                i
-                            } else {
-                                self.logs.len() - 1
-                            }
-                        })
-                        .or(Some(self.logs.len() - 1));
-                    self.logs_state.select(new_selection);
-                }
+                self.apply_timeline_filter(preserve_selection.is_none());
             }
         } else {
             // Fallback to today's entries only
             if let Ok(logs) = storage::read_today_entries(&self.config.data.log_path) {
-                self.logs = logs;
+                self.all_logs = logs;
                 self.is_search_result = false;
                 self.search_highlight_query = None;
                 self.search_highlight_ready_at = None;
                 self.apply_fold_markers();
-                if !self.logs.is_empty() {
-                    self.logs_state.select(Some(self.logs.len() - 1));
-                }
+                self.apply_timeline_filter(preserve_selection.is_none());
             }
         }
 
@@ -451,7 +442,7 @@ impl<'a> App<'a> {
 
         if !self.fold_overrides.is_empty() {
             let mut keep = std::collections::HashSet::new();
-            for entry in &self.logs {
+            for entry in &self.all_logs {
                 keep.insert(EntryIdentity::from(entry));
             }
             self.fold_overrides.retain(|key, _| keep.contains(key));
@@ -527,20 +518,20 @@ impl<'a> App<'a> {
             return;
         }
 
-        let inserted_entries = older_logs.len();
-        let inserted_separators = count_distinct_entry_dates(&older_logs);
+        let older_filtered: Vec<LogEntry> = older_logs
+            .iter()
+            .filter(|entry| entry_matches_timeline_filter(entry, self.timeline_filter))
+            .cloned()
+            .collect();
+        let inserted_entries = older_filtered.len();
+        let inserted_separators = count_distinct_entry_dates(&older_filtered);
         let inserted_ui_items = inserted_entries + inserted_separators;
 
-        let prev_selected = self.logs_state.selected().unwrap_or(0);
-        let new_selected = prev_selected.saturating_add(inserted_entries);
-
         let mut new_logs = older_logs;
-        new_logs.extend(std::mem::take(&mut self.logs));
-        self.logs = new_logs;
+        new_logs.extend(std::mem::take(&mut self.all_logs));
+        self.all_logs = new_logs;
         self.apply_fold_markers();
-
-        // Preserve selection (same logical entry) after prepending.
-        self.logs_state.select(Some(new_selected));
+        self.apply_timeline_filter(false);
 
         // Preserve viewport anchor (same UI item at the top) after prepending.
         if inserted_ui_items > 0 {
@@ -554,7 +545,11 @@ impl<'a> App<'a> {
                 .saturating_add(inserted_ui_items);
         }
 
-        self.toast(format!("✓ Loaded {} more entries", inserted_entries));
+        if inserted_entries == 0 {
+            self.toast("Loaded earlier days (no matching entries).");
+        } else {
+            self.toast(format!("✓ Loaded {} more entries", inserted_entries));
+        }
         self.is_loading_more = false;
     }
 
@@ -776,10 +771,146 @@ impl<'a> App<'a> {
     }
 
     pub(crate) fn apply_fold_markers(&mut self) {
-        let overrides = extract_fold_markers_from_logs(&mut self.logs);
+        let overrides = extract_fold_markers_from_logs(&mut self.all_logs);
         for (key, value) in overrides {
             self.fold_overrides.insert(key, value);
         }
+    }
+
+    pub fn apply_timeline_filter(&mut self, reset_selection: bool) {
+        if self.is_search_result {
+            return;
+        }
+
+        let selected_identity = if !reset_selection {
+            self.logs_state
+                .selected()
+                .and_then(|i| self.logs.get(i))
+                .map(EntryIdentity::from)
+        } else {
+            None
+        };
+
+        self.logs = self
+            .all_logs
+            .iter()
+            .filter(|entry| entry_matches_timeline_filter(entry, self.timeline_filter))
+            .cloned()
+            .collect();
+
+        if self.logs.is_empty() {
+            self.logs_state.select(None);
+        } else if let Some(identity) = selected_identity {
+            if let Some(idx) = self
+                .logs
+                .iter()
+                .position(|entry| EntryIdentity::from(entry) == identity)
+            {
+                self.logs_state.select(Some(idx));
+            } else {
+                self.logs_state.select(Some(self.logs.len() - 1));
+            }
+        } else if reset_selection || self.logs_state.selected().is_none() {
+            self.logs_state.select(Some(self.logs.len() - 1));
+        } else if let Some(i) = self.logs_state.selected() {
+            self.logs_state.select(Some(i.min(self.logs.len() - 1)));
+        }
+
+        if reset_selection {
+            *self.timeline_ui_state.offset_mut() = 0;
+        }
+    }
+
+    pub fn set_timeline_filter(&mut self, filter: TimelineFilter) {
+        if self.timeline_filter == filter {
+            return;
+        }
+        self.timeline_filter = filter;
+        self.entry_scroll_offset = 0;
+        self.entry_scroll_to_bottom = false;
+        *self.timeline_ui_state.offset_mut() = 0;
+        self.apply_timeline_filter(false);
+    }
+
+    pub fn cycle_timeline_filter(&mut self) {
+        self.timeline_filter = match self.timeline_filter {
+            TimelineFilter::All => TimelineFilter::Work,
+            TimelineFilter::Work => TimelineFilter::Personal,
+            TimelineFilter::Personal => TimelineFilter::All,
+        };
+        self.entry_scroll_offset = 0;
+        self.entry_scroll_to_bottom = false;
+        *self.timeline_ui_state.offset_mut() = 0;
+        self.apply_timeline_filter(false);
+    }
+
+    pub fn timeline_filter_label(&self) -> &'static str {
+        match self.timeline_filter {
+            TimelineFilter::All => "All",
+            TimelineFilter::Work => "Work",
+            TimelineFilter::Personal => "Personal",
+        }
+    }
+
+    pub fn set_selected_entry_context(&mut self, context: TimelineFilter) {
+        let Some(i) = self.logs_state.selected() else {
+            self.toast("No entry selected.");
+            return;
+        };
+        let Some(entry) = self.logs.get(i) else {
+            self.toast("No entry selected.");
+            return;
+        };
+
+        let mut lines =
+            storage::read_lines_range(&entry.file_path, entry.line_number, entry.end_line)
+                .unwrap_or_else(|_| entry.content.lines().map(|s| s.to_string()).collect());
+        let changed = apply_context_tag_to_lines(&mut lines, context);
+        if !changed {
+            return;
+        }
+
+        if let Err(err) = storage::replace_entry_lines(
+            &entry.file_path,
+            entry.line_number,
+            entry.end_line,
+            &lines,
+        ) {
+            eprintln!("Failed to update context tag: {}", err);
+            self.toast("Failed to update context tag.");
+            return;
+        }
+
+        let message = match context {
+            TimelineFilter::Work => "Context set to Work.",
+            TimelineFilter::Personal => "Context set to Personal.",
+            TimelineFilter::All => "Context cleared.",
+        };
+        self.update_logs();
+        self.toast(message);
+    }
+
+    pub fn update_composer_context(&mut self, context: TimelineFilter) -> bool {
+        let mut lines = self.textarea.lines().to_vec();
+        let changed = apply_context_tag_to_lines(&mut lines, context);
+        if !changed {
+            return false;
+        }
+
+        let (row, col) = self.textarea.cursor();
+        self.textarea = TextArea::from(lines);
+        self.textarea.set_placeholder_text(PLACEHOLDER_COMPOSE);
+        let row = row.min(self.textarea.lines().len().saturating_sub(1));
+        let col = col.min(
+            self.textarea
+                .lines()
+                .get(row)
+                .map(|line| line.chars().count())
+                .unwrap_or(0),
+        );
+        self.textarea
+            .move_cursor(CursorMove::Jump(row as u16, col as u16));
+        true
     }
 
     pub fn apply_task_filter(&mut self, reset_selection: bool) {
@@ -1259,6 +1390,183 @@ fn is_carryover_task(text: &str) -> bool {
     text.contains("⟦") && text.contains("⟧")
 }
 
+fn entry_matches_timeline_filter(entry: &LogEntry, filter: TimelineFilter) -> bool {
+    let (has_work, has_personal) = entry_context_flags(entry);
+    let is_default_personal = !has_work && !has_personal;
+    match filter {
+        TimelineFilter::All => true,
+        TimelineFilter::Work => has_work,
+        TimelineFilter::Personal => has_personal || is_default_personal,
+    }
+}
+
+pub(crate) fn entry_context_kind(entry: &LogEntry) -> TimelineFilter {
+    let (has_work, has_personal) = entry_context_flags(entry);
+    if has_work {
+        TimelineFilter::Work
+    } else if has_personal {
+        TimelineFilter::Personal
+    } else {
+        TimelineFilter::Personal
+    }
+}
+
+pub(crate) fn entry_context_flags(entry: &LogEntry) -> (bool, bool) {
+    let mut has_work = false;
+    let mut has_personal = false;
+
+    for line in entry.content.lines() {
+        let mut chars = line.char_indices().peekable();
+        while let Some((idx, ch)) = chars.next() {
+            if ch != '#' {
+                continue;
+            }
+
+            let prev = line[..idx].chars().last();
+            let prev_ok = prev.map_or(true, |c| !is_context_tag_char(c));
+
+            let mut token_lower = String::new();
+            let mut end_idx = idx + ch.len_utf8();
+            while let Some(&(next_idx, next_ch)) = chars.peek() {
+                if is_context_tag_char(next_ch) {
+                    token_lower.push(next_ch.to_ascii_lowercase());
+                    end_idx = next_idx + next_ch.len_utf8();
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
+
+            let next = line[end_idx..].chars().next();
+            let next_ok = next.map_or(true, |c| !is_context_tag_char(c));
+            if !(prev_ok && next_ok) {
+                continue;
+            }
+
+            if token_lower == "work" {
+                has_work = true;
+            } else if token_lower == "personal" {
+                has_personal = true;
+            }
+
+            if has_work && has_personal {
+                return (true, true);
+            }
+        }
+    }
+
+    (has_work, has_personal)
+}
+
+fn is_context_tag_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_' || c == '-'
+}
+
+pub(crate) fn strip_context_tags_from_line(line: &str) -> (String, bool) {
+    let mut out = String::with_capacity(line.len());
+    let mut changed = false;
+    let mut chars = line.char_indices().peekable();
+
+    while let Some((idx, ch)) = chars.next() {
+        if ch != '#' {
+            out.push(ch);
+            continue;
+        }
+
+        let prev = line[..idx].chars().last();
+        let prev_ok = prev.map_or(true, |c| !is_context_tag_char(c));
+
+        let mut token = String::new();
+        let mut token_lower = String::new();
+        let mut end_idx = idx + ch.len_utf8();
+        while let Some(&(next_idx, next_ch)) = chars.peek() {
+            if is_context_tag_char(next_ch) {
+                token.push(next_ch);
+                token_lower.push(next_ch.to_ascii_lowercase());
+                end_idx = next_idx + next_ch.len_utf8();
+                chars.next();
+            } else {
+                break;
+            }
+        }
+
+        let next = line[end_idx..].chars().next();
+        let next_ok = next.map_or(true, |c| !is_context_tag_char(c));
+        let is_context = token_lower == "work" || token_lower == "personal";
+
+        if prev_ok && next_ok && is_context {
+            changed = true;
+            if let Some(&(_, next_ch)) = chars.peek() {
+                let out_has_ws =
+                    out.is_empty() || out.chars().last().is_some_and(|c| c.is_whitespace());
+                if next_ch.is_whitespace() && out_has_ws {
+                    chars.next();
+                }
+            }
+            continue;
+        }
+
+        out.push('#');
+        out.push_str(&token);
+    }
+
+    (out, changed)
+}
+
+fn apply_context_tag_to_lines(lines: &mut Vec<String>, context: TimelineFilter) -> bool {
+    let mut changed = false;
+    for line in lines.iter_mut() {
+        let (updated, did_change) = strip_context_tags_from_line(line);
+        if did_change {
+            *line = updated;
+            changed = true;
+        }
+    }
+
+    if context == TimelineFilter::All {
+        return changed;
+    }
+
+    let tag = match context {
+        TimelineFilter::Work => "#work",
+        TimelineFilter::Personal => "#personal",
+        TimelineFilter::All => return changed,
+    };
+
+    let mut start_idx = 0;
+    if lines
+        .first()
+        .is_some_and(|line| is_timestamped_line(line))
+    {
+        start_idx = 1;
+    }
+
+    let insert_idx = lines
+        .iter()
+        .enumerate()
+        .skip(start_idx)
+        .find(|(_, line)| !line.trim().is_empty() && parse_fold_marker(line).is_none())
+        .map(|(idx, _)| idx)
+        .unwrap_or(lines.len());
+
+    if insert_idx >= lines.len() {
+        lines.push(tag.to_string());
+        return true;
+    }
+
+    let target = &mut lines[insert_idx];
+    if target.trim().is_empty() {
+        *target = tag.to_string();
+    } else {
+        if !target.ends_with(' ') {
+            target.push(' ');
+        }
+        target.push_str(tag);
+    }
+
+    true
+}
+
 fn extract_fold_markers_from_logs(
     logs: &mut Vec<LogEntry>,
 ) -> HashMap<EntryIdentity, FoldOverride> {
@@ -1280,29 +1588,65 @@ fn strip_fold_markers(content: &str) -> (Option<FoldOverride>, String) {
     let mut override_state = None;
     let mut lines = Vec::new();
     for line in content.lines() {
-        if let Some(state) = parse_fold_marker(line) {
+        if let Some((state, cleaned)) = parse_fold_marker(line) {
             override_state = Some(state);
+            if let Some(cleaned) = cleaned {
+                lines.push(cleaned);
+            }
             continue;
         }
-        lines.push(line);
+        lines.push(line.to_string());
     }
     (override_state, lines.join("\n"))
 }
 
-fn parse_fold_marker(line: &str) -> Option<FoldOverride> {
-    let trimmed = line.trim();
-    let Some(inner) = trimmed
-        .strip_prefix("<!--")
-        .and_then(|rest| rest.strip_suffix("-->"))
-    else {
-        return None;
+fn parse_fold_marker(line: &str) -> Option<(FoldOverride, Option<String>)> {
+    let start = line.find("<!--")?;
+    let end_rel = line[start + 4..].find("-->")?;
+    let end = start + 4 + end_rel;
+    let inner = line[start + 4..end].trim();
+    let state = match inner {
+        "memolog:expanded" => FoldOverride::Expanded,
+        "memolog:folded" | "memolog:collapsed" => FoldOverride::Folded,
+        _ => return None,
     };
-    let marker = inner.trim();
-    match marker {
-        "memolog:expanded" => Some(FoldOverride::Expanded),
-        "memolog:folded" | "memolog:collapsed" => Some(FoldOverride::Folded),
-        _ => None,
+    let after_start = end + 3;
+    let before = &line[..start];
+    let after = line.get(after_start..).unwrap_or("");
+    let before_ends_ws = before
+        .chars()
+        .last()
+        .map(|c| c.is_whitespace())
+        .unwrap_or(true);
+    let after = if before_ends_ws {
+        after.trim_start_matches(|c: char| c.is_whitespace())
+    } else {
+        after
+    };
+    let mut cleaned = String::with_capacity(line.len());
+    cleaned.push_str(before);
+    cleaned.push_str(after);
+    let cleaned = cleaned.trim_end();
+    let cleaned = if cleaned.trim().is_empty() {
+        None
+    } else {
+        Some(cleaned.to_string())
+    };
+    Some((state, cleaned))
+}
+
+fn strip_fold_markers_from_lines(lines: &[String]) -> Vec<String> {
+    let mut cleaned = Vec::with_capacity(lines.len());
+    for line in lines {
+        if let Some((_, remainder)) = parse_fold_marker(line) {
+            if let Some(remainder) = remainder {
+                cleaned.push(remainder);
+            }
+        } else {
+            cleaned.push(line.clone());
+        }
     }
+    cleaned
 }
 
 fn count_distinct_entry_dates(entries: &[LogEntry]) -> usize {
@@ -1472,6 +1816,7 @@ mod tests {
                 end_line: 2,
             },
         ];
+        app.all_logs = app.logs.clone();
         app.logs_state.select(Some(0));
         app
     }

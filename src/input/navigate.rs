@@ -2,7 +2,7 @@ use crate::{
     actions,
     app::App,
     config::{key_code_for_shortcuts, key_match},
-    models::{self, InputMode},
+    models::{self, InputMode, TimelineFilter},
 };
 use chrono::Local;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -17,6 +17,34 @@ pub fn handle_normal_mode(app: &mut App, key: KeyEvent) {
         && key_match(&key, &app.config.keybindings.timeline.fold_cycle)
     {
         app.cycle_fold_state();
+    } else if app.navigate_focus == models::NavigateFocus::Timeline
+        && key_match(&key, &app.config.keybindings.timeline.filter_toggle)
+    {
+        app.cycle_timeline_filter();
+    } else if app.navigate_focus == models::NavigateFocus::Timeline
+        && key_match(&key, &app.config.keybindings.timeline.filter_work)
+    {
+        app.set_timeline_filter(TimelineFilter::Work);
+    } else if app.navigate_focus == models::NavigateFocus::Timeline
+        && key_match(&key, &app.config.keybindings.timeline.filter_personal)
+    {
+        app.set_timeline_filter(TimelineFilter::Personal);
+    } else if app.navigate_focus == models::NavigateFocus::Timeline
+        && key_match(&key, &app.config.keybindings.timeline.filter_all)
+    {
+        app.set_timeline_filter(TimelineFilter::All);
+    } else if app.navigate_focus == models::NavigateFocus::Timeline
+        && key_match(&key, &app.config.keybindings.timeline.context_work)
+    {
+        app.set_selected_entry_context(TimelineFilter::Work);
+    } else if app.navigate_focus == models::NavigateFocus::Timeline
+        && key_match(&key, &app.config.keybindings.timeline.context_personal)
+    {
+        app.set_selected_entry_context(TimelineFilter::Personal);
+    } else if app.navigate_focus == models::NavigateFocus::Timeline
+        && key_match(&key, &app.config.keybindings.timeline.context_clear)
+    {
+        app.set_selected_entry_context(TimelineFilter::All);
     } else if key_match(&key, &app.config.keybindings.global.help) {
         app.show_help_popup = true;
     } else if key_match(&key, &app.config.keybindings.global.tags) {
