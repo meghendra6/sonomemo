@@ -209,14 +209,15 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             let show_marker = total_display_lines > 1;
             let fold_marker = if show_marker {
                 if is_folded {
-                    "▶ "
+                    "▶"
                 } else {
-                    "▼ "
+                    "▼"
                 }
             } else {
                 ""
             };
             let marker_width = if show_marker { 2 } else { 0 };
+            let marker_padding = if show_marker { " " } else { "" };
             let mut displayed_raw = 0usize;
 
             for (line_idx, raw_line) in entry.content.lines().enumerate() {
@@ -252,11 +253,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                 let line_in_code_block = in_code_block || is_fence;
 
                 let is_first_visible = displayed_raw == 0;
-                let wrap_width = if is_first_visible {
-                    content_width.saturating_sub(marker_width).max(1)
-                } else {
-                    content_width.max(1)
-                };
+                let wrap_width = content_width.saturating_sub(marker_width).max(1);
                 let wrapped = wrap_markdown_line(content_line, wrap_width);
                 let code_segments = if line_in_code_block {
                     if is_fence {
@@ -317,11 +314,17 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                         spans.push(ts_span);
                     }
 
-                    if is_first_visible && wrap_idx == 0 && show_marker {
+                    if show_marker {
+                        let marker_text = if is_first_visible && wrap_idx == 0 {
+                            fold_marker
+                        } else {
+                            " "
+                        };
                         spans.push(Span::styled(
-                            fold_marker.to_string(),
+                            marker_text,
                             Style::default().fg(tokens.ui_muted),
                         ));
+                        spans.push(Span::raw(marker_padding));
                     }
                     if let Some(segments) = code_segments.as_ref() {
                         let segment_len = wline.chars().count();
