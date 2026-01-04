@@ -392,7 +392,111 @@ fn normalize_task_text(text: &str) -> String {
     normalized.to_lowercase()
 }
 
-fn strip_carryover_marker(text: &str) -> (String, Option<String>) {
+fn is_context_tag_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_' || c == '-'
+}
+
+fn strip_context_tags(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.char_indices().peekable();
+
+    while let Some((idx, ch)) = chars.next() {
+        if ch != '#' {
+            out.push(ch);
+            continue;
+        }
+
+        let prev = text[..idx].chars().last();
+        let prev_ok = prev.map_or(true, |c| !is_context_tag_char(c));
+
+        let mut token = String::new();
+        let mut token_lower = String::new();
+        let mut end_idx = idx + ch.len_utf8();
+        while let Some(&(next_idx, next_ch)) = chars.peek() {
+            if is_context_tag_char(next_ch) {
+                token.push(next_ch);
+                token_lower.push(next_ch.to_ascii_lowercase());
+                end_idx = next_idx + next_ch.len_utf8();
+                chars.next();
+            } else {
+                break;
+            }
+        }
+
+        let next = text[end_idx..].chars().next();
+        let next_ok = next.map_or(true, |c| !is_context_tag_char(c));
+        let is_context = token_lower == "work" || token_lower == "personal";
+
+        if prev_ok && next_ok && is_context {
+            if let Some(&(_, next_ch)) = chars.peek() {
+                let out_has_ws =
+                    out.is_empty() || out.chars().last().is_some_and(|c| c.is_whitespace());
+                if next_ch.is_whitespace() && out_has_ws {
+                    chars.next();
+                }
+            }
+            continue;
+        }
+
+        out.push('#');
+        out.push_str(&token);
+    }
+
+    out
+}
+
+fn trailing_context_tag_start(text: &str) -> usize {
+    let mut end = text.len();
+    let mut tail_start = text.len();
+
+    loop {
+        let trimmed = text[..end].trim_end_matches(|c: char| c.is_whitespace());
+        let trimmed_end = trimmed.len();
+        if trimmed_end == 0 {
+            break;
+        }
+
+        let Some(hash_idx) = trimmed.rfind('#') else {
+            break;
+        };
+        let tag = &trimmed[hash_idx + 1..trimmed_end];
+        if tag.is_empty() || !tag.chars().all(is_context_tag_char) {
+            break;
+        }
+        let tag_lower = tag.to_ascii_lowercase();
+        if tag_lower != "work" && tag_lower != "personal" {
+            break;
+        }
+
+        if let Some(prev) = trimmed[..hash_idx].chars().last()
+            && !prev.is_whitespace()
+        {
+            break;
+        }
+
+        let mut ws_start = hash_idx;
+        while ws_start > 0 {
+            let prev = text[..ws_start].chars().last().unwrap();
+            if prev.is_whitespace() {
+                ws_start = ws_start.saturating_sub(prev.len_utf8());
+            } else {
+                break;
+            }
+        }
+
+        tail_start = ws_start;
+        end = ws_start;
+    }
+
+    tail_start
+}
+
+fn split_trailing_context_tags(text: &str) -> (&str, &str) {
+    let start = trailing_context_tag_start(text);
+    text.split_at(start)
+}
+
+fn strip_carryover_marker_at_end(text: &str) -> (String, Option<String>) {
     let trimmed = text.trim_end();
     let open = '⟦';
     let close = '⟧';
@@ -415,6 +519,19 @@ fn strip_carryover_marker(text: &str) -> (String, Option<String>) {
 
     let base = trimmed[..start].trim_end().to_string();
     (base, Some(date.to_string()))
+}
+
+fn strip_carryover_marker(text: &str) -> (String, Option<String>) {
+    let trimmed = text.trim_end();
+    let (head, tail) = split_trailing_context_tags(trimmed);
+    let (base, carryover) = strip_carryover_marker_at_end(head);
+    if carryover.is_none() {
+        return (trimmed.to_string(), None);
+    }
+
+    let mut output = base.trim_end().to_string();
+    output.push_str(tail);
+    (output, carryover)
 }
 
 fn parse_priority_marker(text: &str) -> Option<Priority> {
@@ -453,7 +570,8 @@ fn strip_priority_marker(text: &str) -> String {
 fn task_identity_from_text(text: &str) -> (String, Option<String>) {
     let without_priority = strip_priority_marker(text);
     let without_metadata = strip_task_metadata_tokens(&without_priority);
-    let (base, carryover_from) = strip_carryover_marker(&without_metadata);
+    let without_context = strip_context_tags(&without_metadata);
+    let (base, carryover_from) = strip_carryover_marker(&without_context);
     (normalize_task_text(&base), carryover_from)
 }
 
@@ -552,9 +670,7 @@ fn parse_task_line(line: &str) -> Option<ParsedTaskLine> {
     let (text, _) = strip_trailing_tomatoes(text);
     let text = text.trim();
     let (raw_text, carryover_from) = strip_carryover_marker(text);
-    let base_text = strip_priority_marker(&raw_text);
-    let base_text = strip_task_metadata_tokens(&base_text);
-    let identity = normalize_task_text(&base_text);
+    let (identity, _) = task_identity_from_text(text);
 
     Some(ParsedTaskLine {
         identity,
@@ -608,26 +724,9 @@ fn apply_schedule_tokens(text: &str, schedule: &TaskSchedule) -> String {
 
 fn extract_carryover_marker(text: &str) -> Option<String> {
     let trimmed = text.trim_end();
-    let open = '⟦';
-    let close = '⟧';
-    let Some(start) = trimmed.rfind(open) else {
-        return None;
-    };
-    let Some(close_offset) = trimmed[start..].find(close) else {
-        return None;
-    };
-    let close_index = start + close_offset;
-    let close_len = close.len_utf8();
-    if close_index + close_len != trimmed.len() {
-        return None;
-    }
-
-    let date = &trimmed[start + open.len_utf8()..close_index];
-    if NaiveDate::parse_from_str(date, "%Y-%m-%d").is_err() {
-        return None;
-    }
-
-    Some(date.to_string())
+    let (head, _) = split_trailing_context_tags(trimmed);
+    let (_, carryover) = strip_carryover_marker_at_end(head);
+    carryover
 }
 
 fn split_note_prefix(text: &str) -> (String, &str) {
@@ -1435,6 +1534,20 @@ mod tests {
     }
 
     #[test]
+    fn parse_task_line_ignores_context_tags_in_identity() {
+        let line = "- [ ] Task Name ⟦2026-01-02⟧ #work";
+        let parsed = parse_task_line(line).expect("parsed");
+        assert_eq!(parsed.identity, normalize_task_text("Task Name"));
+    }
+
+    #[test]
+    fn strip_carryover_marker_keeps_context_suffix() {
+        let (base, carryover) = strip_carryover_marker("Task Name ⟦2026-01-02⟧ #personal");
+        assert_eq!(carryover, Some("2026-01-02".to_string()));
+        assert_eq!(base, "Task Name #personal");
+    }
+
+    #[test]
     fn cycle_task_priority_updates_marker() {
         let dir = temp_log_dir();
         let path = get_file_path_for_date(&dir, "2024-01-01");
@@ -1551,6 +1664,17 @@ mod tests {
         let tasks = collect_carryover_tasks(&dir, "2024-12-25").expect("collect");
 
         assert_eq!(tasks, vec!["- [ ] Same Task ⟦2024-12-22⟧"]);
+    }
+
+    #[test]
+    fn collect_carryover_tasks_deduplicates_context_tags() {
+        let dir = temp_log_dir();
+        write_log(&dir, "2024-12-21", "- [ ] Same Task\n");
+        write_log(&dir, "2024-12-22", "- [ ] Same Task #work\n");
+
+        let tasks = collect_carryover_tasks(&dir, "2024-12-25").expect("collect");
+
+        assert_eq!(tasks, vec!["- [ ] Same Task #work ⟦2024-12-22⟧"]);
     }
 
     #[test]
