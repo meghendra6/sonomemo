@@ -7,7 +7,7 @@ use crate::ui::theme::ThemeTokens;
 use chrono::{Datelike, Duration, Local, NaiveDate, NaiveTime, Timelike};
 use ratatui::{
     Frame,
-    layout::{Constraint, Direction, Layout},
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
@@ -785,120 +785,258 @@ pub fn render_help_popup(f: &mut Frame, app: &App) {
     f.render_widget(Clear, area);
     f.render_widget(block, area);
 
+    let sections = help_sections(app);
+    let inner_area = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .margin(2)
+        .split(area);
+
+    let content_area = inner_area[0];
+    if content_area.width >= 90 {
+        let split_idx = split_help_sections_by_height(&sections);
+        let (left, right) = sections.split_at(split_idx);
+        let columns = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(content_area);
+        render_help_blocks_column(f, columns[0], left, &tokens);
+        render_help_blocks_column(f, columns[1], right, &tokens);
+    } else {
+        render_help_blocks_column(f, content_area, &sections, &tokens);
+    }
+
+    let muted_style = Style::default().fg(tokens.ui_muted);
+    f.render_widget(
+        Paragraph::new("Esc / ?: close").style(muted_style),
+        inner_area[1],
+    );
+}
+
+struct HelpSection {
+    title: String,
+    entries: Vec<(String, String)>,
+}
+
+fn join_key_groups(groups: &[String]) -> String {
+    groups
+        .iter()
+        .filter(|value| !value.trim().is_empty())
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(" / ")
+}
+
+fn help_sections(app: &App) -> Vec<HelpSection> {
     let kb = &app.config.keybindings;
 
-    let rows = vec![
-        (
-            "Global",
-            vec![
-                ("Help", fmt_keys(&kb.global.help)),
-                ("Focus move", "Ctrl+H/J/K/L".to_string()),
-                ("Compose", fmt_keys(&kb.global.focus_composer)),
-                ("Search", fmt_keys(&kb.global.search)),
-                ("Tags", fmt_keys(&kb.global.tags)),
-                ("Pomodoro", fmt_keys(&kb.global.pomodoro)),
-                ("Activity", fmt_keys(&kb.global.activity)),
-                ("Focus agenda", fmt_keys(&kb.global.agenda)),
-                ("Log dir", fmt_keys(&kb.global.log_dir)),
-                ("Config", fmt_keys(&kb.global.edit_config)),
-                ("Theme presets", fmt_keys(&kb.global.theme_switcher)),
-                ("Editor style", fmt_keys(&kb.global.editor_style_switcher)),
-                ("Google sync (experimental)", fmt_keys(&kb.global.sync_google)),
-                ("Quit", fmt_keys(&kb.global.quit)),
-            ],
-        ),
-        (
-            "Timeline",
-            vec![
-                ("Up", fmt_keys(&kb.timeline.up)),
-                ("Down", fmt_keys(&kb.timeline.down)),
-                ("Page up", fmt_keys(&kb.timeline.page_up)),
-                ("Page down", fmt_keys(&kb.timeline.page_down)),
-                ("Top", fmt_keys(&kb.timeline.top)),
-                ("Bottom", fmt_keys(&kb.timeline.bottom)),
-                ("Fold toggle", fmt_keys(&kb.timeline.fold_toggle)),
-                ("Fold cycle", fmt_keys(&kb.timeline.fold_cycle)),
-                ("Filter cycle", fmt_keys(&kb.timeline.filter_toggle)),
-                ("Filter work", fmt_keys(&kb.timeline.filter_work)),
-                ("Filter personal", fmt_keys(&kb.timeline.filter_personal)),
-                ("Filter all", fmt_keys(&kb.timeline.filter_all)),
-                ("Context work", fmt_keys(&kb.timeline.context_work)),
-                ("Context personal", fmt_keys(&kb.timeline.context_personal)),
-                ("Context clear", fmt_keys(&kb.timeline.context_clear)),
-                ("Edit", fmt_keys(&kb.timeline.edit)),
-                ("Complete tasks", fmt_keys(&kb.timeline.toggle_todo)),
-            ],
-        ),
-        (
-            "Agenda",
-            vec![
-                ("Up", fmt_keys(&kb.agenda.up)),
-                ("Down", fmt_keys(&kb.agenda.down)),
-                ("Open memo", fmt_keys(&kb.agenda.open)),
-                ("Toggle task", fmt_keys(&kb.agenda.toggle)),
-                ("Filter cycle", fmt_keys(&kb.agenda.filter)),
-                ("Prev day", fmt_keys(&kb.agenda.prev_day)),
-                ("Next day", fmt_keys(&kb.agenda.next_day)),
-                ("Prev week", fmt_keys(&kb.agenda.prev_week)),
-                ("Next week", fmt_keys(&kb.agenda.next_week)),
-                ("Today", fmt_keys(&kb.agenda.today)),
-                ("Unscheduled", fmt_keys(&kb.agenda.toggle_unscheduled)),
-            ],
-        ),
-        (
-            "Tasks",
-            vec![
-                ("Up", fmt_keys(&kb.tasks.up)),
-                ("Down", fmt_keys(&kb.tasks.down)),
-                ("Toggle", fmt_keys(&kb.tasks.toggle)),
-                ("Open memo", fmt_keys(&kb.tasks.open)),
-                ("Priority cycle", fmt_keys(&kb.tasks.priority_cycle)),
-                ("Pomodoro", fmt_keys(&kb.tasks.start_pomodoro)),
-                ("Edit", fmt_keys(&kb.tasks.edit)),
-                ("Filter toggle", fmt_keys(&kb.tasks.filter_toggle)),
-                ("Filter open", fmt_keys(&kb.tasks.filter_open)),
-                ("Filter done", fmt_keys(&kb.tasks.filter_done)),
-                ("Filter all", fmt_keys(&kb.tasks.filter_all)),
-            ],
-        ),
-        (
-            if app.is_vim_mode() {
-                "Composer (Vim mode)"
-            } else {
-                "Composer (Simple mode)"
-            },
-            {
-                let mut composer_entries = vec![
-                    ("Save", fmt_keys(&kb.composer.submit)),
-                    ("New line", fmt_keys(&kb.composer.newline)),
-                    ("Toggle task", fmt_keys(&kb.composer.task_toggle)),
-                    ("Priority cycle", fmt_keys(&kb.composer.priority_cycle)),
-                    ("Date picker", fmt_keys(&kb.composer.date_picker)),
-                    ("Context work", fmt_keys(&kb.composer.context_work)),
-                    ("Context personal", fmt_keys(&kb.composer.context_personal)),
-                    ("Context clear", fmt_keys(&kb.composer.context_clear)),
-                    ("Indent", fmt_keys(&kb.composer.indent)),
-                    ("Outdent", fmt_keys(&kb.composer.outdent)),
-                    ("Clear", fmt_keys(&kb.composer.clear)),
-                    ("Back", fmt_keys(&kb.composer.cancel)),
-                ];
-                if app.is_vim_mode() {
-                    composer_entries.push(("Vim motions", "hjkl, w, b, e, ...".to_string()));
-                    composer_entries.push(("Visual mode", "v, V, Ctrl+v".to_string()));
-                }
-                composer_entries
-            },
-        ),
-        (
-            "Search",
-            vec![
-                ("Apply", fmt_keys(&kb.search.submit)),
-                ("Clear", fmt_keys(&kb.search.clear)),
-                ("Cancel", fmt_keys(&kb.search.cancel)),
-            ],
-        ),
-    ];
+    let timeline_filter_keys = join_key_groups(&[
+        fmt_keys(&kb.timeline.filter_work),
+        fmt_keys(&kb.timeline.filter_personal),
+        fmt_keys(&kb.timeline.filter_all),
+    ]);
+    let timeline_context_keys = join_key_groups(&[
+        fmt_keys(&kb.timeline.context_work),
+        fmt_keys(&kb.timeline.context_personal),
+        fmt_keys(&kb.timeline.context_clear),
+    ]);
+    let tasks_filter_keys = join_key_groups(&[
+        fmt_keys(&kb.tasks.filter_open),
+        fmt_keys(&kb.tasks.filter_done),
+        fmt_keys(&kb.tasks.filter_all),
+    ]);
+    let composer_context_keys = join_key_groups(&[
+        fmt_keys(&kb.composer.context_work),
+        fmt_keys(&kb.composer.context_personal),
+        fmt_keys(&kb.composer.context_clear),
+    ]);
 
+    let mut composer_entries = vec![
+        ("Save".to_string(), fmt_keys(&kb.composer.submit)),
+        ("New line".to_string(), fmt_keys(&kb.composer.newline)),
+        ("Toggle task".to_string(), fmt_keys(&kb.composer.task_toggle)),
+        (
+            "Priority cycle".to_string(),
+            fmt_keys(&kb.composer.priority_cycle),
+        ),
+        ("Date picker".to_string(), fmt_keys(&kb.composer.date_picker)),
+        ("Context: work/personal/clear".to_string(), composer_context_keys),
+        ("Indent".to_string(), fmt_keys(&kb.composer.indent)),
+        ("Outdent".to_string(), fmt_keys(&kb.composer.outdent)),
+        ("Clear".to_string(), fmt_keys(&kb.composer.clear)),
+        ("Back".to_string(), fmt_keys(&kb.composer.cancel)),
+    ];
+    if app.is_vim_mode() {
+        composer_entries.push(("Vim motions".to_string(), "hjkl, w, b, e, ...".to_string()));
+        composer_entries.push(("Visual mode".to_string(), "v, V, Ctrl+v".to_string()));
+    }
+
+    vec![
+        HelpSection {
+            title: "Global".to_string(),
+            entries: vec![
+                ("Help".to_string(), fmt_keys(&kb.global.help)),
+                ("Focus move".to_string(), "Ctrl+H/J/K/L".to_string()),
+                ("Compose".to_string(), fmt_keys(&kb.global.focus_composer)),
+                ("Search".to_string(), fmt_keys(&kb.global.search)),
+                ("Tags".to_string(), fmt_keys(&kb.global.tags)),
+                ("Pomodoro".to_string(), fmt_keys(&kb.global.pomodoro)),
+                ("Activity".to_string(), fmt_keys(&kb.global.activity)),
+                ("Focus agenda".to_string(), fmt_keys(&kb.global.agenda)),
+                ("Log dir".to_string(), fmt_keys(&kb.global.log_dir)),
+                ("Config".to_string(), fmt_keys(&kb.global.edit_config)),
+                ("Theme presets".to_string(), fmt_keys(&kb.global.theme_switcher)),
+                (
+                    "Editor style".to_string(),
+                    fmt_keys(&kb.global.editor_style_switcher),
+                ),
+                (
+                    "Google sync (experimental)".to_string(),
+                    fmt_keys(&kb.global.sync_google),
+                ),
+                ("Quit".to_string(), fmt_keys(&kb.global.quit)),
+            ],
+        },
+        HelpSection {
+            title: "Timeline".to_string(),
+            entries: vec![
+                ("Up".to_string(), fmt_keys(&kb.timeline.up)),
+                ("Down".to_string(), fmt_keys(&kb.timeline.down)),
+                ("Page up".to_string(), fmt_keys(&kb.timeline.page_up)),
+                ("Page down".to_string(), fmt_keys(&kb.timeline.page_down)),
+                ("Top".to_string(), fmt_keys(&kb.timeline.top)),
+                ("Bottom".to_string(), fmt_keys(&kb.timeline.bottom)),
+                ("Fold toggle".to_string(), fmt_keys(&kb.timeline.fold_toggle)),
+                ("Fold cycle".to_string(), fmt_keys(&kb.timeline.fold_cycle)),
+                ("Filter cycle".to_string(), fmt_keys(&kb.timeline.filter_toggle)),
+                ("Filter: work/personal/all".to_string(), timeline_filter_keys),
+                (
+                    "Context: work/personal/clear".to_string(),
+                    timeline_context_keys,
+                ),
+                ("Edit".to_string(), fmt_keys(&kb.timeline.edit)),
+                (
+                    "Complete tasks".to_string(),
+                    fmt_keys(&kb.timeline.toggle_todo),
+                ),
+            ],
+        },
+        HelpSection {
+            title: "Tasks".to_string(),
+            entries: vec![
+                ("Up".to_string(), fmt_keys(&kb.tasks.up)),
+                ("Down".to_string(), fmt_keys(&kb.tasks.down)),
+                ("Toggle".to_string(), fmt_keys(&kb.tasks.toggle)),
+                ("Open memo".to_string(), fmt_keys(&kb.tasks.open)),
+                (
+                    "Priority cycle".to_string(),
+                    fmt_keys(&kb.tasks.priority_cycle),
+                ),
+                ("Pomodoro".to_string(), fmt_keys(&kb.tasks.start_pomodoro)),
+                ("Edit".to_string(), fmt_keys(&kb.tasks.edit)),
+                ("Filter cycle".to_string(), fmt_keys(&kb.tasks.filter_toggle)),
+                ("Filter: open/done/all".to_string(), tasks_filter_keys),
+            ],
+        },
+        HelpSection {
+            title: if app.is_vim_mode() {
+                "Composer (Vim mode)".to_string()
+            } else {
+                "Composer (Simple mode)".to_string()
+            },
+            entries: composer_entries,
+        },
+        HelpSection {
+            title: "Agenda".to_string(),
+            entries: vec![
+                ("Up".to_string(), fmt_keys(&kb.agenda.up)),
+                ("Down".to_string(), fmt_keys(&kb.agenda.down)),
+                ("Open memo".to_string(), fmt_keys(&kb.agenda.open)),
+                ("Toggle task".to_string(), fmt_keys(&kb.agenda.toggle)),
+                ("Filter cycle".to_string(), fmt_keys(&kb.agenda.filter)),
+                ("Prev day".to_string(), fmt_keys(&kb.agenda.prev_day)),
+                ("Next day".to_string(), fmt_keys(&kb.agenda.next_day)),
+                ("Prev week".to_string(), fmt_keys(&kb.agenda.prev_week)),
+                ("Next week".to_string(), fmt_keys(&kb.agenda.next_week)),
+                ("Today".to_string(), fmt_keys(&kb.agenda.today)),
+                (
+                    "Unscheduled".to_string(),
+                    fmt_keys(&kb.agenda.toggle_unscheduled),
+                ),
+            ],
+        },
+        HelpSection {
+            title: "Search".to_string(),
+            entries: vec![
+                ("Apply".to_string(), fmt_keys(&kb.search.submit)),
+                ("Clear".to_string(), fmt_keys(&kb.search.clear)),
+                ("Cancel".to_string(), fmt_keys(&kb.search.cancel)),
+            ],
+        },
+    ]
+}
+
+fn help_section_height(section: &HelpSection) -> usize {
+    let header_lines = 1;
+    let content_lines = section.entries.len() + header_lines;
+    content_lines + 2
+}
+
+fn split_help_sections_by_height(sections: &[HelpSection]) -> usize {
+    let mut counts = Vec::with_capacity(sections.len());
+    let mut total = 0usize;
+    for section in sections {
+        let count = help_section_height(section) + 1;
+        counts.push(count);
+        total += count;
+    }
+    let half = total / 2;
+    let mut acc = 0usize;
+    for (idx, count) in counts.iter().enumerate() {
+        if idx > 0 && acc + count > half {
+            return idx;
+        }
+        acc += count;
+    }
+    sections.len()
+}
+
+fn render_help_blocks_column(
+    f: &mut Frame,
+    area: Rect,
+    sections: &[HelpSection],
+    tokens: &ThemeTokens,
+) {
+    let mut y = area.y;
+    let max_y = area.y.saturating_add(area.height);
+
+    for (idx, section) in sections.iter().enumerate() {
+        if y >= max_y {
+            break;
+        }
+        let remaining = max_y.saturating_sub(y);
+        if remaining < 3 {
+            break;
+        }
+        let mut block_height = help_section_height(section) as u16;
+        if block_height > remaining {
+            block_height = remaining;
+        }
+        let rect = Rect {
+            x: area.x,
+            y,
+            width: area.width,
+            height: block_height,
+        };
+        render_help_block(f, rect, section, tokens);
+        y = y.saturating_add(block_height);
+        if idx + 1 < sections.len() && y < max_y {
+            y = y.saturating_add(1);
+        }
+    }
+}
+
+fn render_help_block(f: &mut Frame, area: Rect, section: &HelpSection, tokens: &ThemeTokens) {
     let header_style = Style::default()
         .fg(tokens.ui_accent)
         .add_modifier(Modifier::BOLD);
@@ -908,33 +1046,46 @@ pub fn render_help_popup(f: &mut Frame, app: &App) {
     let label_style = Style::default().fg(tokens.ui_fg);
     let muted_style = Style::default().fg(tokens.ui_muted);
 
-    let mut items: Vec<ListItem> = Vec::new();
-    for (section, entries) in rows {
-        items.push(ListItem::new(Line::from(vec![
-            Span::styled("•", header_style),
-            Span::raw(" "),
-            Span::styled(section, header_style),
-        ])));
-        for (label, keys) in entries {
-            items.push(ListItem::new(Line::from(vec![
-                Span::styled(format!("{:<18}", keys), key_style),
-                Span::styled(label, label_style),
-            ])));
-        }
-        items.push(ListItem::new(Line::from("")));
+    let block = Block::default()
+        .title(Span::styled(format!(" {} ", section.title), header_style))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(tokens.ui_border_default));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    if inner.height == 0 || inner.width == 0 {
+        return;
     }
 
-    let inner_area = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(1)])
-        .margin(2)
-        .split(area);
+    let max_key_width = section
+        .entries
+        .iter()
+        .map(|(_, keys)| keys.chars().count())
+        .max()
+        .unwrap_or(0);
+    let max_width = inner.width.saturating_sub(6) as usize;
+    let key_width = max_key_width.max(6).min(max_width.max(6));
 
-    f.render_widget(List::new(items), inner_area[0]);
-    f.render_widget(
-        Paragraph::new("Esc / ?: close").style(muted_style),
-        inner_area[1],
-    );
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let key_label = "Keys";
+    let key_pad = key_width.saturating_sub(key_label.len());
+    lines.push(Line::from(vec![
+        Span::styled(key_label, muted_style),
+        Span::raw(" ".repeat(key_pad + 2)),
+        Span::styled("Action", muted_style),
+    ]));
+
+    for (label, keys) in &section.entries {
+        let key_len = keys.chars().count();
+        let padding = key_width.saturating_sub(key_len);
+        lines.push(Line::from(vec![
+            Span::styled(keys.clone(), key_style),
+            Span::raw(" ".repeat(padding + 2)),
+            Span::styled(label.clone(), label_style),
+        ]));
+    }
+
+    let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: true });
+    f.render_widget(paragraph, inner);
 }
 
 fn render_visual_help_popup(f: &mut Frame, _app: &App, kind: VisualKind, tokens: &ThemeTokens) {
