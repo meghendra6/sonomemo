@@ -1,4 +1,6 @@
-use super::components::{centered_rect, markdown_prefix_width, parse_markdown_spans, wrap_markdown_line};
+use super::components::{
+    centered_rect, markdown_prefix_width, parse_markdown_spans, wrap_markdown_line,
+};
 use crate::app::App;
 use crate::config::{EditorStyle, ThemePreset};
 use crate::models::{DatePickerField, EditorMode, InputMode, Mood, VisualKind};
@@ -7,7 +9,7 @@ use crate::ui::theme::ThemeTokens;
 use chrono::{Datelike, Duration, Local, NaiveDate, NaiveTime, Timelike};
 use ratatui::{
     Frame,
-    layout::{Constraint, Direction, Layout},
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
@@ -242,9 +244,7 @@ pub fn render_memo_preview_popup(f: &mut Frame, app: &App) {
         }
     }
 
-    let max_scroll = lines
-        .len()
-        .saturating_sub(content_area.height as usize);
+    let max_scroll = lines.len().saturating_sub(content_area.height as usize);
     let scroll = app.memo_preview_scroll.min(max_scroll);
 
     let paragraph = Paragraph::new(Text::from(lines))
@@ -270,7 +270,11 @@ pub fn render_date_picker_popup(f: &mut Frame, app: &App) {
 
     let sections = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(1), Constraint::Length(1)])
+        .constraints([
+            Constraint::Min(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
         .margin(1)
         .split(inner);
 
@@ -301,7 +305,12 @@ pub fn render_date_picker_popup(f: &mut Frame, app: &App) {
     );
 }
 
-fn render_date_picker_fields(f: &mut Frame, app: &App, area: ratatui::layout::Rect, tokens: &ThemeTokens) {
+fn render_date_picker_fields(
+    f: &mut Frame,
+    app: &App,
+    area: ratatui::layout::Rect,
+    tokens: &ThemeTokens,
+) {
     let fields = [
         DatePickerField::Scheduled,
         DatePickerField::Due,
@@ -319,7 +328,10 @@ fn render_date_picker_fields(f: &mut Frame, app: &App, area: ratatui::layout::Re
         let label = date_picker_field_label(field);
         let value = date_picker_field_value(app, field);
         let line = Line::from(vec![
-            Span::styled(format!("{:<10}", label), Style::default().fg(tokens.ui_accent)),
+            Span::styled(
+                format!("{:<10}", label),
+                Style::default().fg(tokens.ui_accent),
+            ),
             Span::styled(value, Style::default().fg(tokens.ui_fg)),
         ]);
         items.push(ListItem::new(line));
@@ -328,7 +340,9 @@ fn render_date_picker_fields(f: &mut Frame, app: &App, area: ratatui::layout::Re
     let highlight = Style::default()
         .bg(tokens.ui_selection_bg)
         .add_modifier(Modifier::BOLD);
-    let list = List::new(items).highlight_style(highlight).highlight_symbol(" ");
+    let list = List::new(items)
+        .highlight_style(highlight)
+        .highlight_symbol(" ");
     let mut state = ratatui::widgets::ListState::default();
     state.select(Some(selected));
     f.render_stateful_widget(list, area, &mut state);
@@ -368,8 +382,8 @@ fn render_date_picker_calendar(
     )));
     lines.push(Line::from("Mo Tu We Th Fr Sa Su"));
 
-    let month_start = NaiveDate::from_ymd_opt(selected.year(), selected.month(), 1)
-        .unwrap_or(selected);
+    let month_start =
+        NaiveDate::from_ymd_opt(selected.year(), selected.month(), 1).unwrap_or(selected);
     let first_weekday = month_start.weekday().num_days_from_monday() as usize;
     let days_in_month = last_day_of_month(selected.year(), selected.month());
 
@@ -383,8 +397,8 @@ fn render_date_picker_calendar(
                 continue;
             }
 
-            let date = NaiveDate::from_ymd_opt(selected.year(), selected.month(), day)
-                .unwrap_or(selected);
+            let date =
+                NaiveDate::from_ymd_opt(selected.year(), selected.month(), day).unwrap_or(selected);
             let mut style = Style::default().fg(tokens.ui_fg);
             if date == today {
                 style = style.fg(tokens.ui_accent);
@@ -463,7 +477,10 @@ fn render_date_picker_duration(
                 .bg(tokens.ui_selection_bg)
                 .add_modifier(Modifier::BOLD);
         }
-        spans.push(Span::styled(format!("{:>4}", format_duration(preset)), style));
+        spans.push(Span::styled(
+            format!("{:>4}", format_duration(preset)),
+            style,
+        ));
         spans.push(Span::raw(" "));
     }
 
@@ -785,120 +802,655 @@ pub fn render_help_popup(f: &mut Frame, app: &App) {
     f.render_widget(Clear, area);
     f.render_widget(block, area);
 
+    let inner_area = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .margin(2)
+        .split(area);
+
+    let content_area = inner_area[0];
+    let column_count = help_column_count(content_area.width);
+    let mut sections = help_sections(app, false);
+    let mut block_gap = 1;
+    let (mut columns, mut overflow) =
+        layout_help_sections(&sections, column_count, content_area.height, block_gap);
+    if overflow {
+        sections = help_sections(app, true);
+        block_gap = 0;
+        let layout = layout_help_sections(&sections, column_count, content_area.height, block_gap);
+        columns = layout.0;
+        overflow = layout.1;
+    }
+
+    let column_areas = if column_count == 1 {
+        vec![content_area]
+    } else {
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints(help_column_constraints(column_count))
+            .split(content_area)
+            .to_vec()
+    };
+
+    for (idx, area) in column_areas.iter().enumerate() {
+        if let Some(section_list) = columns.get(idx) {
+            render_help_blocks_column(f, *area, section_list, &tokens, block_gap);
+        }
+    }
+    let footer_text = if overflow {
+        "Some sections hidden (widen window) · Esc / ?: close"
+    } else {
+        "Esc / ?: close"
+    };
+    let muted_style = Style::default().fg(tokens.ui_muted);
+    f.render_widget(
+        Paragraph::new(footer_text).style(muted_style),
+        inner_area[1],
+    );
+}
+
+#[derive(Clone)]
+struct HelpSection {
+    title: String,
+    entries: Vec<(String, String)>,
+    show_header: bool,
+}
+
+fn join_key_groups_with_sep(groups: &[String], sep: &str) -> String {
+    let mut filtered = Vec::new();
+    for value in groups {
+        let trimmed = value.trim();
+        if trimmed.is_empty() || trimmed == "-" {
+            continue;
+        }
+        filtered.push(trimmed.to_string());
+    }
+    if filtered.is_empty() {
+        "-".to_string()
+    } else {
+        filtered.join(sep)
+    }
+}
+
+fn help_sections(app: &App, compact: bool) -> Vec<HelpSection> {
     let kb = &app.config.keybindings;
+    let show_header = !compact;
 
-    let rows = vec![
-        (
-            "Global",
-            vec![
-                ("Help", fmt_keys(&kb.global.help)),
-                ("Focus move", "Ctrl+H/J/K/L".to_string()),
-                ("Compose", fmt_keys(&kb.global.focus_composer)),
-                ("Search", fmt_keys(&kb.global.search)),
-                ("Tags", fmt_keys(&kb.global.tags)),
-                ("Pomodoro", fmt_keys(&kb.global.pomodoro)),
-                ("Activity", fmt_keys(&kb.global.activity)),
-                ("Focus agenda", fmt_keys(&kb.global.agenda)),
-                ("Log dir", fmt_keys(&kb.global.log_dir)),
-                ("Config", fmt_keys(&kb.global.edit_config)),
-                ("Theme presets", fmt_keys(&kb.global.theme_switcher)),
-                ("Editor style", fmt_keys(&kb.global.editor_style_switcher)),
-                ("Google sync (experimental)", fmt_keys(&kb.global.sync_google)),
-                ("Quit", fmt_keys(&kb.global.quit)),
-            ],
-        ),
-        (
-            "Timeline",
-            vec![
-                ("Up", fmt_keys(&kb.timeline.up)),
-                ("Down", fmt_keys(&kb.timeline.down)),
-                ("Page up", fmt_keys(&kb.timeline.page_up)),
-                ("Page down", fmt_keys(&kb.timeline.page_down)),
-                ("Top", fmt_keys(&kb.timeline.top)),
-                ("Bottom", fmt_keys(&kb.timeline.bottom)),
-                ("Fold toggle", fmt_keys(&kb.timeline.fold_toggle)),
-                ("Fold cycle", fmt_keys(&kb.timeline.fold_cycle)),
-                ("Filter cycle", fmt_keys(&kb.timeline.filter_toggle)),
-                ("Filter work", fmt_keys(&kb.timeline.filter_work)),
-                ("Filter personal", fmt_keys(&kb.timeline.filter_personal)),
-                ("Filter all", fmt_keys(&kb.timeline.filter_all)),
-                ("Context work", fmt_keys(&kb.timeline.context_work)),
-                ("Context personal", fmt_keys(&kb.timeline.context_personal)),
-                ("Context clear", fmt_keys(&kb.timeline.context_clear)),
-                ("Edit", fmt_keys(&kb.timeline.edit)),
-                ("Complete tasks", fmt_keys(&kb.timeline.toggle_todo)),
-            ],
-        ),
-        (
-            "Agenda",
-            vec![
-                ("Up", fmt_keys(&kb.agenda.up)),
-                ("Down", fmt_keys(&kb.agenda.down)),
-                ("Open memo", fmt_keys(&kb.agenda.open)),
-                ("Toggle task", fmt_keys(&kb.agenda.toggle)),
-                ("Filter cycle", fmt_keys(&kb.agenda.filter)),
-                ("Prev day", fmt_keys(&kb.agenda.prev_day)),
-                ("Next day", fmt_keys(&kb.agenda.next_day)),
-                ("Prev week", fmt_keys(&kb.agenda.prev_week)),
-                ("Next week", fmt_keys(&kb.agenda.next_week)),
-                ("Today", fmt_keys(&kb.agenda.today)),
-                ("Unscheduled", fmt_keys(&kb.agenda.toggle_unscheduled)),
-            ],
-        ),
-        (
-            "Tasks",
-            vec![
-                ("Up", fmt_keys(&kb.tasks.up)),
-                ("Down", fmt_keys(&kb.tasks.down)),
-                ("Toggle", fmt_keys(&kb.tasks.toggle)),
-                ("Open memo", fmt_keys(&kb.tasks.open)),
-                ("Priority cycle", fmt_keys(&kb.tasks.priority_cycle)),
-                ("Pomodoro", fmt_keys(&kb.tasks.start_pomodoro)),
-                ("Edit", fmt_keys(&kb.tasks.edit)),
-                ("Filter toggle", fmt_keys(&kb.tasks.filter_toggle)),
-                ("Filter open", fmt_keys(&kb.tasks.filter_open)),
-                ("Filter done", fmt_keys(&kb.tasks.filter_done)),
-                ("Filter all", fmt_keys(&kb.tasks.filter_all)),
-            ],
-        ),
-        (
-            if app.is_vim_mode() {
-                "Composer (Vim mode)"
+    let timeline_filter_keys = join_key_groups_with_sep(
+        &[
+            fmt_keys(&kb.timeline.filter_work),
+            fmt_keys(&kb.timeline.filter_personal),
+            fmt_keys(&kb.timeline.filter_all),
+        ],
+        " / ",
+    );
+    let timeline_context_keys = join_key_groups_with_sep(
+        &[
+            fmt_keys(&kb.timeline.context_work),
+            fmt_keys(&kb.timeline.context_personal),
+            fmt_keys(&kb.timeline.context_clear),
+        ],
+        " / ",
+    );
+    let tasks_filter_keys = join_key_groups_with_sep(
+        &[
+            fmt_keys(&kb.tasks.filter_open),
+            fmt_keys(&kb.tasks.filter_done),
+            fmt_keys(&kb.tasks.filter_all),
+        ],
+        " / ",
+    );
+    let composer_context_keys = join_key_groups_with_sep(
+        &[
+            fmt_keys(&kb.composer.context_work),
+            fmt_keys(&kb.composer.context_personal),
+            fmt_keys(&kb.composer.context_clear),
+        ],
+        " / ",
+    );
+
+    let mut composer_entries = if compact {
+        vec![
+            (
+                "Save / Back".to_string(),
+                join_key_groups_with_sep(
+                    &[fmt_keys(&kb.composer.submit), fmt_keys(&kb.composer.cancel)],
+                    " | ",
+                ),
+            ),
+            ("New line".to_string(), fmt_keys(&kb.composer.newline)),
+            (
+                "Task / Priority".to_string(),
+                join_key_groups_with_sep(
+                    &[
+                        fmt_keys(&kb.composer.task_toggle),
+                        fmt_keys(&kb.composer.priority_cycle),
+                    ],
+                    " | ",
+                ),
+            ),
+            (
+                "Date picker".to_string(),
+                fmt_keys(&kb.composer.date_picker),
+            ),
+            (
+                "Context: work/personal/clear".to_string(),
+                composer_context_keys,
+            ),
+            (
+                "Indent / Outdent".to_string(),
+                join_key_groups_with_sep(
+                    &[
+                        fmt_keys(&kb.composer.indent),
+                        fmt_keys(&kb.composer.outdent),
+                    ],
+                    " | ",
+                ),
+            ),
+            ("Clear".to_string(), fmt_keys(&kb.composer.clear)),
+        ]
+    } else {
+        vec![
+            ("Save".to_string(), fmt_keys(&kb.composer.submit)),
+            ("New line".to_string(), fmt_keys(&kb.composer.newline)),
+            (
+                "Toggle task".to_string(),
+                fmt_keys(&kb.composer.task_toggle),
+            ),
+            (
+                "Priority cycle".to_string(),
+                fmt_keys(&kb.composer.priority_cycle),
+            ),
+            (
+                "Date picker".to_string(),
+                fmt_keys(&kb.composer.date_picker),
+            ),
+            (
+                "Context: work/personal/clear".to_string(),
+                composer_context_keys,
+            ),
+            ("Indent".to_string(), fmt_keys(&kb.composer.indent)),
+            ("Outdent".to_string(), fmt_keys(&kb.composer.outdent)),
+            ("Clear".to_string(), fmt_keys(&kb.composer.clear)),
+            ("Back".to_string(), fmt_keys(&kb.composer.cancel)),
+        ]
+    };
+    if app.is_vim_mode() {
+        composer_entries.push(("Vim motions".to_string(), "hjkl, w, b, e, ...".to_string()));
+        composer_entries.push(("Visual mode".to_string(), "v, V, Ctrl+v".to_string()));
+    }
+    if compact {
+        composer_entries.retain(|(_, keys)| keys != "-");
+        if composer_entries.is_empty() {
+            composer_entries.push(("No bindings".to_string(), "-".to_string()));
+        }
+    }
+
+    let global_entries = if compact {
+        vec![
+            ("Help".to_string(), fmt_keys(&kb.global.help)),
+            ("Focus move".to_string(), "Ctrl+H/J/K/L".to_string()),
+            (
+                "Compose / Search / Tags".to_string(),
+                join_key_groups_with_sep(
+                    &[
+                        fmt_keys(&kb.global.focus_composer),
+                        fmt_keys(&kb.global.search),
+                        fmt_keys(&kb.global.tags),
+                    ],
+                    " | ",
+                ),
+            ),
+            (
+                "Pomodoro / Activity".to_string(),
+                join_key_groups_with_sep(
+                    &[fmt_keys(&kb.global.pomodoro), fmt_keys(&kb.global.activity)],
+                    " | ",
+                ),
+            ),
+            ("Focus agenda".to_string(), fmt_keys(&kb.global.agenda)),
+            (
+                "Log dir / Config".to_string(),
+                join_key_groups_with_sep(
+                    &[
+                        fmt_keys(&kb.global.log_dir),
+                        fmt_keys(&kb.global.edit_config),
+                    ],
+                    " | ",
+                ),
+            ),
+            (
+                "Theme presets / Editor style".to_string(),
+                join_key_groups_with_sep(
+                    &[
+                        fmt_keys(&kb.global.theme_switcher),
+                        fmt_keys(&kb.global.editor_style_switcher),
+                    ],
+                    " | ",
+                ),
+            ),
+            ("Google sync".to_string(), fmt_keys(&kb.global.sync_google)),
+            ("Quit".to_string(), fmt_keys(&kb.global.quit)),
+        ]
+    } else {
+        vec![
+            ("Help".to_string(), fmt_keys(&kb.global.help)),
+            ("Focus move".to_string(), "Ctrl+H/J/K/L".to_string()),
+            ("Compose".to_string(), fmt_keys(&kb.global.focus_composer)),
+            ("Search".to_string(), fmt_keys(&kb.global.search)),
+            ("Tags".to_string(), fmt_keys(&kb.global.tags)),
+            ("Pomodoro".to_string(), fmt_keys(&kb.global.pomodoro)),
+            ("Activity".to_string(), fmt_keys(&kb.global.activity)),
+            ("Focus agenda".to_string(), fmt_keys(&kb.global.agenda)),
+            ("Log dir".to_string(), fmt_keys(&kb.global.log_dir)),
+            ("Config".to_string(), fmt_keys(&kb.global.edit_config)),
+            (
+                "Theme presets".to_string(),
+                fmt_keys(&kb.global.theme_switcher),
+            ),
+            (
+                "Editor style".to_string(),
+                fmt_keys(&kb.global.editor_style_switcher),
+            ),
+            (
+                "Google sync (experimental)".to_string(),
+                fmt_keys(&kb.global.sync_google),
+            ),
+            ("Quit".to_string(), fmt_keys(&kb.global.quit)),
+        ]
+    };
+
+    let timeline_entries = if compact {
+        vec![
+            (
+                "Move up/down".to_string(),
+                join_key_groups_with_sep(
+                    &[fmt_keys(&kb.timeline.up), fmt_keys(&kb.timeline.down)],
+                    " | ",
+                ),
+            ),
+            (
+                "Move page/top/bottom".to_string(),
+                join_key_groups_with_sep(
+                    &[
+                        fmt_keys(&kb.timeline.page_up),
+                        fmt_keys(&kb.timeline.page_down),
+                        fmt_keys(&kb.timeline.top),
+                        fmt_keys(&kb.timeline.bottom),
+                    ],
+                    " | ",
+                ),
+            ),
+            (
+                "Fold toggle / cycle".to_string(),
+                join_key_groups_with_sep(
+                    &[
+                        fmt_keys(&kb.timeline.fold_toggle),
+                        fmt_keys(&kb.timeline.fold_cycle),
+                    ],
+                    " | ",
+                ),
+            ),
+            (
+                "Filter cycle / set".to_string(),
+                join_key_groups_with_sep(
+                    &[
+                        fmt_keys(&kb.timeline.filter_toggle),
+                        timeline_filter_keys.clone(),
+                    ],
+                    " | ",
+                ),
+            ),
+            (
+                "Context: work/personal/clear".to_string(),
+                timeline_context_keys.clone(),
+            ),
+            (
+                "Edit / Complete tasks".to_string(),
+                join_key_groups_with_sep(
+                    &[
+                        fmt_keys(&kb.timeline.edit),
+                        fmt_keys(&kb.timeline.toggle_todo),
+                    ],
+                    " | ",
+                ),
+            ),
+        ]
+    } else {
+        vec![
+            ("Up".to_string(), fmt_keys(&kb.timeline.up)),
+            ("Down".to_string(), fmt_keys(&kb.timeline.down)),
+            ("Page up".to_string(), fmt_keys(&kb.timeline.page_up)),
+            ("Page down".to_string(), fmt_keys(&kb.timeline.page_down)),
+            ("Top".to_string(), fmt_keys(&kb.timeline.top)),
+            ("Bottom".to_string(), fmt_keys(&kb.timeline.bottom)),
+            (
+                "Fold toggle".to_string(),
+                fmt_keys(&kb.timeline.fold_toggle),
+            ),
+            ("Fold cycle".to_string(), fmt_keys(&kb.timeline.fold_cycle)),
+            (
+                "Filter cycle".to_string(),
+                fmt_keys(&kb.timeline.filter_toggle),
+            ),
+            (
+                "Filter: work/personal/all".to_string(),
+                timeline_filter_keys.clone(),
+            ),
+            (
+                "Context: work/personal/clear".to_string(),
+                timeline_context_keys.clone(),
+            ),
+            ("Edit".to_string(), fmt_keys(&kb.timeline.edit)),
+            (
+                "Complete tasks".to_string(),
+                fmt_keys(&kb.timeline.toggle_todo),
+            ),
+        ]
+    };
+
+    let tasks_entries = if compact {
+        vec![
+            (
+                "Move up/down".to_string(),
+                join_key_groups_with_sep(
+                    &[fmt_keys(&kb.tasks.up), fmt_keys(&kb.tasks.down)],
+                    " | ",
+                ),
+            ),
+            (
+                "Toggle / Open".to_string(),
+                join_key_groups_with_sep(
+                    &[fmt_keys(&kb.tasks.toggle), fmt_keys(&kb.tasks.open)],
+                    " | ",
+                ),
+            ),
+            (
+                "Priority / Pomodoro".to_string(),
+                join_key_groups_with_sep(
+                    &[
+                        fmt_keys(&kb.tasks.priority_cycle),
+                        fmt_keys(&kb.tasks.start_pomodoro),
+                    ],
+                    " | ",
+                ),
+            ),
+            ("Edit".to_string(), fmt_keys(&kb.tasks.edit)),
+            (
+                "Filter cycle / set".to_string(),
+                join_key_groups_with_sep(
+                    &[fmt_keys(&kb.tasks.filter_toggle), tasks_filter_keys.clone()],
+                    " | ",
+                ),
+            ),
+        ]
+    } else {
+        vec![
+            ("Up".to_string(), fmt_keys(&kb.tasks.up)),
+            ("Down".to_string(), fmt_keys(&kb.tasks.down)),
+            ("Toggle".to_string(), fmt_keys(&kb.tasks.toggle)),
+            ("Open memo".to_string(), fmt_keys(&kb.tasks.open)),
+            (
+                "Priority cycle".to_string(),
+                fmt_keys(&kb.tasks.priority_cycle),
+            ),
+            ("Pomodoro".to_string(), fmt_keys(&kb.tasks.start_pomodoro)),
+            ("Edit".to_string(), fmt_keys(&kb.tasks.edit)),
+            (
+                "Filter cycle".to_string(),
+                fmt_keys(&kb.tasks.filter_toggle),
+            ),
+            (
+                "Filter: open/done/all".to_string(),
+                tasks_filter_keys.clone(),
+            ),
+        ]
+    };
+
+    let agenda_entries = if compact {
+        vec![
+            (
+                "Move up/down".to_string(),
+                join_key_groups_with_sep(
+                    &[fmt_keys(&kb.agenda.up), fmt_keys(&kb.agenda.down)],
+                    " | ",
+                ),
+            ),
+            (
+                "Open / Toggle".to_string(),
+                join_key_groups_with_sep(
+                    &[fmt_keys(&kb.agenda.open), fmt_keys(&kb.agenda.toggle)],
+                    " | ",
+                ),
+            ),
+            ("Filter".to_string(), fmt_keys(&kb.agenda.filter)),
+            (
+                "Prev/Next day".to_string(),
+                join_key_groups_with_sep(
+                    &[fmt_keys(&kb.agenda.prev_day), fmt_keys(&kb.agenda.next_day)],
+                    " | ",
+                ),
+            ),
+            (
+                "Prev/Next week".to_string(),
+                join_key_groups_with_sep(
+                    &[
+                        fmt_keys(&kb.agenda.prev_week),
+                        fmt_keys(&kb.agenda.next_week),
+                    ],
+                    " | ",
+                ),
+            ),
+            (
+                "Today / Unscheduled".to_string(),
+                join_key_groups_with_sep(
+                    &[
+                        fmt_keys(&kb.agenda.today),
+                        fmt_keys(&kb.agenda.toggle_unscheduled),
+                    ],
+                    " | ",
+                ),
+            ),
+        ]
+    } else {
+        vec![
+            ("Up".to_string(), fmt_keys(&kb.agenda.up)),
+            ("Down".to_string(), fmt_keys(&kb.agenda.down)),
+            ("Open memo".to_string(), fmt_keys(&kb.agenda.open)),
+            ("Toggle task".to_string(), fmt_keys(&kb.agenda.toggle)),
+            ("Filter cycle".to_string(), fmt_keys(&kb.agenda.filter)),
+            ("Prev day".to_string(), fmt_keys(&kb.agenda.prev_day)),
+            ("Next day".to_string(), fmt_keys(&kb.agenda.next_day)),
+            ("Prev week".to_string(), fmt_keys(&kb.agenda.prev_week)),
+            ("Next week".to_string(), fmt_keys(&kb.agenda.next_week)),
+            ("Today".to_string(), fmt_keys(&kb.agenda.today)),
+            (
+                "Unscheduled".to_string(),
+                fmt_keys(&kb.agenda.toggle_unscheduled),
+            ),
+        ]
+    };
+
+    let mut search_entries = if compact {
+        vec![
+            (
+                "Apply / Cancel".to_string(),
+                join_key_groups_with_sep(
+                    &[fmt_keys(&kb.search.submit), fmt_keys(&kb.search.cancel)],
+                    " | ",
+                ),
+            ),
+            ("Clear".to_string(), fmt_keys(&kb.search.clear)),
+        ]
+    } else {
+        vec![
+            ("Apply".to_string(), fmt_keys(&kb.search.submit)),
+            ("Clear".to_string(), fmt_keys(&kb.search.clear)),
+            ("Cancel".to_string(), fmt_keys(&kb.search.cancel)),
+        ]
+    };
+    if compact {
+        search_entries.retain(|(_, keys)| keys != "-");
+        if search_entries.is_empty() {
+            search_entries.push(("No bindings".to_string(), "-".to_string()));
+        }
+    }
+
+    vec![
+        HelpSection {
+            title: "Global".to_string(),
+            entries: global_entries,
+            show_header,
+        },
+        HelpSection {
+            title: "Timeline".to_string(),
+            entries: timeline_entries,
+            show_header,
+        },
+        HelpSection {
+            title: "Tasks".to_string(),
+            entries: tasks_entries,
+            show_header,
+        },
+        HelpSection {
+            title: if app.is_vim_mode() {
+                "Composer (Vim mode)".to_string()
             } else {
-                "Composer (Simple mode)"
+                "Composer (Simple mode)".to_string()
             },
-            {
-                let mut composer_entries = vec![
-                    ("Save", fmt_keys(&kb.composer.submit)),
-                    ("New line", fmt_keys(&kb.composer.newline)),
-                    ("Toggle task", fmt_keys(&kb.composer.task_toggle)),
-                    ("Priority cycle", fmt_keys(&kb.composer.priority_cycle)),
-                    ("Date picker", fmt_keys(&kb.composer.date_picker)),
-                    ("Context work", fmt_keys(&kb.composer.context_work)),
-                    ("Context personal", fmt_keys(&kb.composer.context_personal)),
-                    ("Context clear", fmt_keys(&kb.composer.context_clear)),
-                    ("Indent", fmt_keys(&kb.composer.indent)),
-                    ("Outdent", fmt_keys(&kb.composer.outdent)),
-                    ("Clear", fmt_keys(&kb.composer.clear)),
-                    ("Back", fmt_keys(&kb.composer.cancel)),
-                ];
-                if app.is_vim_mode() {
-                    composer_entries.push(("Vim motions", "hjkl, w, b, e, ...".to_string()));
-                    composer_entries.push(("Visual mode", "v, V, Ctrl+v".to_string()));
-                }
-                composer_entries
-            },
-        ),
-        (
-            "Search",
-            vec![
-                ("Apply", fmt_keys(&kb.search.submit)),
-                ("Clear", fmt_keys(&kb.search.clear)),
-                ("Cancel", fmt_keys(&kb.search.cancel)),
-            ],
-        ),
-    ];
+            entries: composer_entries,
+            show_header,
+        },
+        HelpSection {
+            title: "Agenda".to_string(),
+            entries: agenda_entries,
+            show_header,
+        },
+        HelpSection {
+            title: "Search".to_string(),
+            entries: search_entries,
+            show_header,
+        },
+    ]
+}
 
+fn help_section_height(section: &HelpSection) -> usize {
+    let header_lines = if section.show_header { 1 } else { 0 };
+    let content_lines = section.entries.len() + header_lines;
+    content_lines + 2
+}
+
+fn help_column_count(width: u16) -> usize {
+    if width >= 120 {
+        3
+    } else if width >= 70 {
+        2
+    } else {
+        1
+    }
+}
+
+fn help_column_constraints(column_count: usize) -> Vec<Constraint> {
+    let mut constraints = Vec::new();
+    if column_count == 0 {
+        return constraints;
+    }
+    let base = 100 / column_count as u16;
+    let mut used = 0u16;
+    for idx in 0..column_count {
+        let value = if idx + 1 == column_count {
+            100 - used
+        } else {
+            base
+        };
+        used += value;
+        constraints.push(Constraint::Percentage(value));
+    }
+    constraints
+}
+
+fn layout_help_sections(
+    sections: &[HelpSection],
+    column_count: usize,
+    column_height: u16,
+    block_gap: usize,
+) -> (Vec<Vec<HelpSection>>, bool) {
+    let mut columns: Vec<Vec<HelpSection>> = vec![Vec::new(); column_count.max(1)];
+    let mut heights = vec![0usize; column_count.max(1)];
+    let max_height = column_height as usize;
+    let mut col_idx = 0usize;
+    let mut overflow = false;
+
+    for section in sections {
+        let section_height = help_section_height(section);
+        let required = if heights[col_idx] == 0 {
+            section_height
+        } else {
+            section_height + block_gap
+        };
+        if heights[col_idx] + required <= max_height {
+            heights[col_idx] += required;
+            columns[col_idx].push(section.clone());
+            continue;
+        }
+        if col_idx + 1 < columns.len() {
+            col_idx += 1;
+            let required = if heights[col_idx] == 0 {
+                section_height
+            } else {
+                section_height + block_gap
+            };
+            if heights[col_idx] + required <= max_height {
+                heights[col_idx] += required;
+                columns[col_idx].push(section.clone());
+            } else {
+                overflow = true;
+            }
+        } else {
+            overflow = true;
+        }
+        if overflow {
+            break;
+        }
+    }
+
+    (columns, overflow)
+}
+
+fn render_help_blocks_column(
+    f: &mut Frame,
+    area: Rect,
+    sections: &[HelpSection],
+    tokens: &ThemeTokens,
+    block_gap: usize,
+) {
+    let mut y = area.y;
+    let max_y = area.y.saturating_add(area.height);
+
+    for (idx, section) in sections.iter().enumerate() {
+        if y >= max_y {
+            break;
+        }
+        let remaining = max_y.saturating_sub(y);
+        let block_height = help_section_height(section) as u16;
+        if block_height > remaining {
+            break;
+        }
+        let rect = Rect {
+            x: area.x,
+            y,
+            width: area.width,
+            height: block_height,
+        };
+        render_help_block(f, rect, section, tokens);
+        y = y.saturating_add(block_height);
+        if idx + 1 < sections.len() && y < max_y {
+            y = y.saturating_add(block_gap as u16);
+        }
+    }
+}
+
+fn render_help_block(f: &mut Frame, area: Rect, section: &HelpSection, tokens: &ThemeTokens) {
     let header_style = Style::default()
         .fg(tokens.ui_accent)
         .add_modifier(Modifier::BOLD);
@@ -908,33 +1460,47 @@ pub fn render_help_popup(f: &mut Frame, app: &App) {
     let label_style = Style::default().fg(tokens.ui_fg);
     let muted_style = Style::default().fg(tokens.ui_muted);
 
-    let mut items: Vec<ListItem> = Vec::new();
-    for (section, entries) in rows {
-        items.push(ListItem::new(Line::from(vec![
-            Span::styled("•", header_style),
-            Span::raw(" "),
-            Span::styled(section, header_style),
-        ])));
-        for (label, keys) in entries {
-            items.push(ListItem::new(Line::from(vec![
-                Span::styled(format!("{:<18}", keys), key_style),
-                Span::styled(label, label_style),
-            ])));
-        }
-        items.push(ListItem::new(Line::from("")));
+    let block = Block::default()
+        .title(Span::styled(format!(" {} ", section.title), header_style))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(tokens.ui_border_default));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    if inner.height == 0 || inner.width == 0 {
+        return;
     }
 
-    let inner_area = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(1)])
-        .margin(2)
-        .split(area);
+    let max_key_width = section
+        .entries
+        .iter()
+        .map(|(_, keys)| keys.chars().count())
+        .max()
+        .unwrap_or(0);
+    let max_width = inner.width.saturating_sub(6) as usize;
+    let key_width = max_key_width.max(6).min(max_width.max(6));
 
-    f.render_widget(List::new(items), inner_area[0]);
-    f.render_widget(
-        Paragraph::new("Esc / ?: close").style(muted_style),
-        inner_area[1],
-    );
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    if section.show_header {
+        let key_label = "Keys";
+        let key_pad = key_width.saturating_sub(key_label.len());
+        lines.push(Line::from(vec![
+            Span::styled(key_label, muted_style),
+            Span::raw(" ".repeat(key_pad + 2)),
+            Span::styled("Action", muted_style),
+        ]));
+    }
+    for (label, keys) in &section.entries {
+        let key_len = keys.chars().count();
+        let padding = key_width.saturating_sub(key_len);
+        lines.push(Line::from(vec![
+            Span::styled(keys.clone(), key_style),
+            Span::raw(" ".repeat(padding + 2)),
+            Span::styled(label.clone(), label_style),
+        ]));
+    }
+
+    let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: true });
+    f.render_widget(paragraph, inner);
 }
 
 fn render_visual_help_popup(f: &mut Frame, _app: &App, kind: VisualKind, tokens: &ThemeTokens) {
