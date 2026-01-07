@@ -71,6 +71,8 @@ fn handle_ai_search(app: &mut App) {
     match result {
         Ok(gemini::AiSearchOutcome::Success(response)) => {
             app.ai_search_receiver = None;
+            app.show_ai_loading_popup = false;
+            app.ai_loading_question = None;
             app.ai_response_scroll = 0;
             app.ai_response = Some(response.clone());
             app.show_ai_response_popup = true;
@@ -96,11 +98,17 @@ fn handle_ai_search(app: &mut App) {
         }
         Ok(gemini::AiSearchOutcome::Error(message)) => {
             app.ai_search_receiver = None;
+            app.show_ai_loading_popup = false;
+            app.ai_loading_question = None;
+            app.show_ai_response_popup = false;
             app.toast(message);
         }
         Err(TryRecvError::Empty) => {}
         Err(TryRecvError::Disconnected) => {
             app.ai_search_receiver = None;
+            app.show_ai_loading_popup = false;
+            app.ai_loading_question = None;
+            app.show_ai_response_popup = false;
             app.toast("AI search stopped.");
         }
     }

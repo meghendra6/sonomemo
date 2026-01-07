@@ -172,6 +172,7 @@ extraction_model = "gemma-3-27b-it"
 answer_model = "gemini-3-flash-preview"
 extraction_attempts = 3
 extraction_temperature = 0.4
+answer_max_tokens = 2048
 max_keywords = 6
 max_results = 8
 max_entry_chars = 1200

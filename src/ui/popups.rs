@@ -291,7 +291,12 @@ pub fn render_ai_response_popup(f: &mut Frame, app: &App) {
     } else {
         body.push('\n');
     }
-    body.push_str(response.answer.trim());
+    let answer = response.answer.trim();
+    if answer.is_empty() {
+        body.push_str("Answer: (no response)");
+    } else {
+        body.push_str(answer);
+    }
 
     if !response.entries.is_empty() {
         body.push_str("\n\nSources:\n");
@@ -300,8 +305,7 @@ pub fn render_ai_response_popup(f: &mut Frame, app: &App) {
                 .file_name()
                 .and_then(|s| s.to_str())
                 .unwrap_or(entry.file_path.as_str());
-            let first_line = entry.content.lines().next().unwrap_or("");
-            let preview = crate::models::strip_timestamp_prefix(first_line).trim();
+            let preview = first_content_line(&entry.content);
             body.push_str(&format!(
                 "- [{idx}] {file}:{line} {preview}\n",
                 idx = idx + 1,
@@ -403,9 +407,66 @@ pub fn render_ai_response_popup(f: &mut Frame, app: &App) {
         .scroll((scroll as u16, 0));
     f.render_widget(paragraph, content_area);
 
-    let footer = Paragraph::new("Esc close · J/K scroll")
+    let footer = Paragraph::new("Esc close · J/K scroll · S save")
         .style(Style::default().fg(tokens.ui_muted));
     f.render_widget(footer, footer_area);
+}
+
+pub fn render_ai_loading_popup(f: &mut Frame, app: &App) {
+    let tokens = ThemeTokens::from_theme(&app.config.theme);
+    let block = Block::default()
+        .title(" AI Search ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(tokens.ui_border_default));
+    let area = centered_rect(70, 30, f.area());
+    let inner = block.inner(area);
+    f.render_widget(Clear, area);
+    f.render_widget(block, area);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(2), Constraint::Min(1), Constraint::Length(1)])
+        .split(inner);
+
+    let spinner = loading_spinner();
+    let title = Line::from(vec![
+        Span::styled(spinner, Style::default().fg(tokens.ui_accent)),
+        Span::raw(" "),
+        Span::styled(
+            "Analyzing question and searching memos...",
+            Style::default().fg(tokens.ui_fg),
+        ),
+    ]);
+    f.render_widget(Paragraph::new(title), chunks[0]);
+
+    let question = app
+        .ai_loading_question
+        .as_deref()
+        .unwrap_or("Preparing request...");
+    let content = Paragraph::new(question)
+        .style(Style::default().fg(tokens.ui_muted))
+        .wrap(Wrap { trim: true });
+    f.render_widget(content, chunks[1]);
+
+    let footer = Paragraph::new("Esc hide")
+        .style(Style::default().fg(tokens.ui_muted));
+    f.render_widget(footer, chunks[2]);
+}
+
+fn loading_spinner() -> &'static str {
+    const FRAMES: [&str; 4] = ["-", "\\", "|", "/"];
+    let idx = (Local::now().timestamp_subsec_millis() / 250) as usize % FRAMES.len();
+    FRAMES[idx]
+}
+
+fn first_content_line(text: &str) -> String {
+    for line in text.lines() {
+        let trimmed = crate::models::strip_timestamp_prefix(line).trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+    String::new()
 }
 
 pub fn render_date_picker_popup(f: &mut Frame, app: &App) {

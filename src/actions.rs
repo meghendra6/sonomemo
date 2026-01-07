@@ -310,6 +310,72 @@ pub fn submit_search(app: &mut App) {
     }
 }
 
+pub fn save_ai_answer_to_memo(app: &mut App) {
+    let Some(response) = app.ai_response.as_ref() else {
+        app.toast("No AI answer to save.");
+        return;
+    };
+
+    let mut content = String::new();
+    content.push_str("AI Answer\n");
+    content.push_str("Question: ");
+    content.push_str(response.question.trim());
+    content.push('\n');
+
+    if !response.keywords.is_empty() {
+        content.push_str("Keywords: ");
+        content.push_str(&response.keywords.join(", "));
+        content.push('\n');
+    }
+
+    content.push('\n');
+    let answer = response.answer.trim();
+    if answer.is_empty() {
+        content.push_str("Answer: (no response)\n");
+    } else {
+        content.push_str(answer);
+        if !answer.ends_with('\n') {
+            content.push('\n');
+        }
+    }
+
+    if !response.entries.is_empty() {
+        content.push_str("\nSources:\n");
+        for (idx, entry) in response.entries.iter().enumerate() {
+            let file = std::path::Path::new(&entry.file_path)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or(entry.file_path.as_str());
+            let preview = first_content_line(&entry.content);
+            content.push_str(&format!(
+                "- [{idx}] {file}:{line} {preview}\n",
+                idx = idx + 1,
+                file = file,
+                line = entry.line_number + 1,
+                preview = preview
+            ));
+        }
+    }
+
+    match storage::append_entry(&app.config.data.log_path, &content) {
+        Ok(_) => {
+            app.update_logs();
+            app.toast("Saved AI answer to memo.");
+        }
+        Err(_) => app.toast("Failed to save AI answer."),
+    }
+}
+
+fn first_content_line(text: &str) -> String {
+    for line in text.lines() {
+        let trimmed = crate::models::strip_timestamp_prefix(line).trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+    String::new()
+}
+
 fn parse_ai_query(query: &str) -> Option<String> {
     let trimmed = query.trim();
     if trimmed.starts_with('?') {
@@ -358,6 +424,8 @@ fn submit_ai_search(app: &mut App, question: &str) {
     app.search_highlight_ready_at = None;
     app.is_search_result = false;
     app.update_logs();
+    app.show_ai_loading_popup = true;
+    app.ai_loading_question = Some(question.to_string());
 
     let receiver = gemini::spawn_ai_search(
         app.config.gemini.clone(),

@@ -217,7 +217,7 @@ fn generate_answer(
     let prompt = format!(
         "You answer questions using ONLY the provided memo entries.\n\
 If the answer is not present, say you cannot find it.\n\
-Answer in Korean and cite sources like [1], [2].\n\n\
+Be thorough and structured, but avoid filler. Answer in Korean and cite sources like [1], [2].\n\n\
 Question: {question}\n\n\
 Entries:\n{context}",
         question = question.trim(),
@@ -225,7 +225,8 @@ Entries:\n{context}",
     );
 
     let model = resolve_answer_model(config);
-    generate_text(client, api_key, &model, &prompt, 512, 0.2)
+    let max_tokens = config.answer_max_tokens.max(256).min(8192);
+    generate_text(client, api_key, &model, &prompt, max_tokens, 0.2)
 }
 
 fn generate_text(

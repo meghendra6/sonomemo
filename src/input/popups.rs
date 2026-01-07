@@ -1,4 +1,5 @@
 use crate::{
+    actions,
     app::App,
     config::{self, key_code_for_shortcuts, key_match, config_path, EditorStyle, ThemePreset},
     date_input::{parse_duration_input, parse_relative_date_input, parse_time_input},
@@ -39,6 +40,10 @@ pub fn handle_popup_events(app: &mut App, key: KeyEvent) -> bool {
     }
     if app.show_ai_response_popup {
         handle_ai_response_popup(app, key);
+        return true;
+    }
+    if app.show_ai_loading_popup {
+        handle_ai_loading_popup(app, key);
         return true;
     }
 
@@ -125,6 +130,11 @@ fn handle_ai_response_popup(app: &mut App, key: KeyEvent) {
         return;
     }
 
+    if matches!(key_code, KeyCode::Char('s') | KeyCode::Char('S')) {
+        actions::save_ai_answer_to_memo(app);
+        return;
+    }
+
     if key_match(&key, &app.config.keybindings.popup.up) {
         app.ai_response_scroll = app.ai_response_scroll.saturating_sub(1);
         return;
@@ -142,6 +152,12 @@ fn handle_ai_response_popup(app: &mut App, key: KeyEvent) {
             app.ai_response_scroll = app.ai_response_scroll.saturating_add(5);
         }
         _ => {}
+    }
+}
+
+fn handle_ai_loading_popup(app: &mut App, key: KeyEvent) {
+    if key_match(&key, &app.config.keybindings.popup.cancel) || key.code == KeyCode::Esc {
+        app.show_ai_loading_popup = false;
     }
 }
 

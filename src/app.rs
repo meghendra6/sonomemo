@@ -153,6 +153,8 @@ pub struct App<'a> {
     pub ai_response: Option<AiSearchResult>,
     pub ai_response_scroll: usize,
     pub ai_search_receiver: Option<Receiver<AiSearchOutcome>>,
+    pub show_ai_loading_popup: bool,
+    pub ai_loading_question: Option<String>,
 
     // Pomodoro completion alert (blocks input until expiry)
     pub pomodoro_alert_expiry: Option<DateTime<Local>>,
@@ -337,6 +339,8 @@ impl<'a> App<'a> {
             ai_response: None,
             ai_response_scroll: 0,
             ai_search_receiver: None,
+            show_ai_loading_popup: false,
+            ai_loading_question: None,
             pomodoro_alert_expiry: None,
             pomodoro_alert_message: None,
             toast_message: None,
