@@ -297,9 +297,9 @@ impl Default for GeminiConfig {
         Self {
             enabled: false,
             api_key: String::new(),
-            model: "gemini-3-flash".to_string(),
-            extraction_model: "gemma-3-27b".to_string(),
-            answer_model: "gemini-3-flash".to_string(),
+            model: "gemini-3-flash-preview".to_string(),
+            extraction_model: "gemma-3-27b-it".to_string(),
+            answer_model: "gemini-3-flash-preview".to_string(),
             extraction_attempts: 3,
             extraction_temperature: 0.4,
             max_keywords: 6,

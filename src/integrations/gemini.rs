@@ -127,7 +127,8 @@ fn extract_keywords(
             .get(attempt)
             .unwrap_or_else(|| prompts.first().expect("prompt"));
         let temperature = extraction_temperature_for_attempt(config, attempt);
-        let response = match generate_text(client, api_key, model, prompt, 128, temperature) {
+        let response =
+            match generate_text(client, api_key, &model, prompt, 128, temperature) {
             Ok(text) => text,
             Err(err) => {
                 last_error = Some(err);
@@ -165,8 +166,14 @@ fn extract_keywords(
 
     let mut keywords: Vec<String> = ranked.iter().map(|(keyword, _)| keyword.clone()).collect();
     if keywords.len() > max_keywords {
-    let refined =
-        refine_keywords(client, api_key, question, &ranked, max_keywords, model);
+            let refined = refine_keywords(
+                client,
+                api_key,
+                question,
+                &ranked,
+                max_keywords,
+                &model,
+            );
         if let Ok(refined) = refined {
             keywords = refined;
         } else {
@@ -218,7 +225,7 @@ Entries:\n{context}",
     );
 
     let model = resolve_answer_model(config);
-    generate_text(client, api_key, model, &prompt, 512, 0.2)
+    generate_text(client, api_key, &model, &prompt, 512, 0.2)
 }
 
 fn generate_text(
@@ -378,27 +385,38 @@ Candidates: {candidates}",
     Ok(unique)
 }
 
-fn resolve_extraction_model(config: &GeminiConfig) -> &str {
+fn resolve_extraction_model(config: &GeminiConfig) -> String {
     if !config.extraction_model.trim().is_empty() {
-        return config.extraction_model.trim();
+        return normalize_model_name(config.extraction_model.trim());
     }
     if !config.model.trim().is_empty() {
-        return config.model.trim();
+        return normalize_model_name(config.model.trim());
     }
     if !config.answer_model.trim().is_empty() {
-        return config.answer_model.trim();
+        return normalize_model_name(config.answer_model.trim());
     }
-    "gemma-3-27b"
+    normalize_model_name("gemma-3-27b-it")
 }
 
-fn resolve_answer_model(config: &GeminiConfig) -> &str {
+fn resolve_answer_model(config: &GeminiConfig) -> String {
     if !config.answer_model.trim().is_empty() {
-        return config.answer_model.trim();
+        return normalize_model_name(config.answer_model.trim());
     }
     if !config.model.trim().is_empty() {
-        return config.model.trim();
+        return normalize_model_name(config.model.trim());
     }
-    "gemini-3-flash"
+    normalize_model_name("gemini-3-flash-preview")
+}
+
+fn normalize_model_name(model: &str) -> String {
+    let trimmed = model.trim();
+    let stripped = trimmed.strip_prefix("models/").unwrap_or(trimmed);
+    match stripped {
+        "gemini-3-flash" => "gemini-3-flash-preview".to_string(),
+        "gemma-3-12b" => "gemma-3-12b-it".to_string(),
+        "gemma-3-27b" => "gemma-3-27b-it".to_string(),
+        other => other.to_string(),
+    }
 }
 
 fn extract_json_object(text: &str) -> Option<&str> {
