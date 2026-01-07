@@ -257,6 +257,157 @@ pub fn render_memo_preview_popup(f: &mut Frame, app: &App) {
     f.render_widget(footer, footer_area);
 }
 
+pub fn render_ai_response_popup(f: &mut Frame, app: &App) {
+    let Some(response) = app.ai_response.as_ref() else {
+        return;
+    };
+
+    let tokens = ThemeTokens::from_theme(&app.config.theme);
+    let block = Block::default()
+        .title(" AI Answer ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(tokens.ui_border_default));
+    let area = centered_rect(90, 80, f.area());
+    let inner = block.inner(area);
+    f.render_widget(Clear, area);
+    f.render_widget(block, area);
+
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .split(inner);
+
+    let content_area = sections[0];
+    let footer_area = sections[1];
+
+    let mut body = String::new();
+    body.push_str("Question: ");
+    body.push_str(response.question.trim());
+    body.push('\n');
+    if !response.keywords.is_empty() {
+        body.push_str("Keywords: ");
+        body.push_str(&response.keywords.join(", "));
+        body.push_str("\n\n");
+    } else {
+        body.push('\n');
+    }
+    body.push_str(response.answer.trim());
+
+    if !response.entries.is_empty() {
+        body.push_str("\n\nSources:\n");
+        for (idx, entry) in response.entries.iter().enumerate() {
+            let file = std::path::Path::new(&entry.file_path)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or(entry.file_path.as_str());
+            let first_line = entry.content.lines().next().unwrap_or("");
+            let preview = crate::models::strip_timestamp_prefix(first_line).trim();
+            body.push_str(&format!(
+                "- [{idx}] {file}:{line} {preview}\n",
+                idx = idx + 1,
+                file = file,
+                line = entry.line_number + 1,
+                preview = preview
+            ));
+        }
+    }
+
+    let width = content_area.width.saturating_sub(2).max(1) as usize;
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let theme_preset = super::resolve_theme_preset(&app.config);
+    let syntax_set = super::syntax_set();
+    let syntax_theme = super::select_syntax_theme(super::syntax_theme_set(), &tokens, theme_preset);
+    let code_bg = super::code_block_background(&tokens);
+    let fence_style = super::code_fallback_style(code_bg).fg(tokens.ui_muted);
+    let mut in_code_block = false;
+    let mut code_highlighter: Option<HighlightLines> = None;
+
+    for raw_line in body.lines() {
+        let trimmed = raw_line.trim_start();
+        let is_fence = trimmed.starts_with("```");
+        let opening_fence = is_fence && !in_code_block;
+        let closing_fence = is_fence && in_code_block;
+        if opening_fence {
+            let language = super::parse_fence_language(trimmed);
+            let syntax = super::syntax_for_language(syntax_set, language.as_deref());
+            code_highlighter = Some(HighlightLines::new(syntax, syntax_theme));
+        }
+
+        let line_in_code_block = in_code_block || is_fence;
+        let wrapped = wrap_markdown_line(raw_line, width);
+        let code_segments = if line_in_code_block {
+            if is_fence {
+                Some(vec![super::StyledSegment {
+                    text: raw_line.to_string(),
+                    style: fence_style,
+                }])
+            } else if let Some(highlighter) = code_highlighter.as_mut() {
+                Some(super::highlight_code_line(
+                    raw_line,
+                    highlighter,
+                    syntax_set,
+                    code_bg,
+                ))
+            } else {
+                Some(vec![super::StyledSegment {
+                    text: raw_line.to_string(),
+                    style: super::code_fallback_style(code_bg),
+                }])
+            }
+        } else {
+            None
+        };
+        let prefix_width = if code_segments.is_some() {
+            markdown_prefix_width(raw_line)
+        } else {
+            0
+        };
+        let mut segment_start_col = 0usize;
+        for (wrap_idx, line) in wrapped.iter().enumerate() {
+            if let Some(segments) = code_segments.as_ref() {
+                let segment_len = line.chars().count();
+                let (code_spans, consumed_len) = super::code_spans_for_wrapped_line(
+                    segments,
+                    wrap_idx,
+                    segment_start_col,
+                    segment_len,
+                    prefix_width,
+                    code_bg,
+                );
+                lines.push(Line::from(code_spans));
+                segment_start_col = segment_start_col.saturating_add(consumed_len);
+            } else {
+                lines.push(Line::from(parse_markdown_spans(
+                    line,
+                    &app.config.theme,
+                    line_in_code_block,
+                    None,
+                    Style::default(),
+                )));
+            }
+        }
+
+        if closing_fence {
+            in_code_block = false;
+            code_highlighter = None;
+        } else if opening_fence {
+            in_code_block = true;
+        }
+    }
+
+    let max_scroll = lines.len().saturating_sub(content_area.height as usize);
+    let scroll = app.ai_response_scroll.min(max_scroll);
+
+    let paragraph = Paragraph::new(Text::from(lines))
+        .wrap(Wrap { trim: false })
+        .scroll((scroll as u16, 0));
+    f.render_widget(paragraph, content_area);
+
+    let footer = Paragraph::new("Esc close · J/K scroll")
+        .style(Style::default().fg(tokens.ui_muted));
+    f.render_widget(footer, footer_area);
+}
+
 pub fn render_date_picker_popup(f: &mut Frame, app: &App) {
     let tokens = ThemeTokens::from_theme(&app.config.theme);
     let block = Block::default()
@@ -1281,12 +1432,14 @@ fn help_sections(app: &App, compact: bool) -> Vec<HelpSection> {
                 ),
             ),
             ("Clear".to_string(), fmt_keys(&kb.search.clear)),
+            ("AI search".to_string(), "Prefix ? / ai: / ask:".to_string()),
         ]
     } else {
         vec![
             ("Apply".to_string(), fmt_keys(&kb.search.submit)),
             ("Clear".to_string(), fmt_keys(&kb.search.clear)),
             ("Cancel".to_string(), fmt_keys(&kb.search.cancel)),
+            ("AI search".to_string(), "Prefix ? / ai: / ask:".to_string()),
         ]
     };
     if compact {

@@ -37,6 +37,10 @@ pub fn handle_popup_events(app: &mut App, key: KeyEvent) -> bool {
         handle_memo_preview_popup(app, key);
         return true;
     }
+    if app.show_ai_response_popup {
+        handle_ai_response_popup(app, key);
+        return true;
+    }
 
     if app.show_exit_popup {
         handle_exit_popup(app, key);
@@ -108,6 +112,34 @@ fn handle_memo_preview_popup(app: &mut App, key: KeyEvent) {
         }
         KeyCode::PageDown => {
             app.memo_preview_scroll = app.memo_preview_scroll.saturating_add(5);
+        }
+        _ => {}
+    }
+}
+
+fn handle_ai_response_popup(app: &mut App, key: KeyEvent) {
+    let key_code = key_code_for_shortcuts(&key);
+    if key_match(&key, &app.config.keybindings.popup.cancel) || key.code == KeyCode::Esc {
+        app.show_ai_response_popup = false;
+        app.ai_response = None;
+        return;
+    }
+
+    if key_match(&key, &app.config.keybindings.popup.up) {
+        app.ai_response_scroll = app.ai_response_scroll.saturating_sub(1);
+        return;
+    }
+    if key_match(&key, &app.config.keybindings.popup.down) {
+        app.ai_response_scroll = app.ai_response_scroll.saturating_add(1);
+        return;
+    }
+
+    match key_code {
+        KeyCode::PageUp => {
+            app.ai_response_scroll = app.ai_response_scroll.saturating_sub(5);
+        }
+        KeyCode::PageDown => {
+            app.ai_response_scroll = app.ai_response_scroll.saturating_add(5);
         }
         _ => {}
     }
