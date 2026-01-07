@@ -375,7 +375,7 @@ pub struct GlobalBindings {
 impl Default for GlobalBindings {
     fn default() -> Self {
         Self {
-            quit: vec!["ctrl+q".to_string(), "q".to_string()],
+            quit: vec!["q".to_string()],
             help: vec!["?".to_string()],
             focus_timeline: Vec::new(),
             focus_tasks: Vec::new(),
@@ -990,9 +990,16 @@ impl Config {
 
         let removed_composer = remove_keybinding(&mut self.keybindings.composer.clear, "ctrl+l");
         let removed_search = remove_keybinding(&mut self.keybindings.search.clear, "ctrl+l");
-        let removed_focus_timeline = remove_keybinding(&mut self.keybindings.global.focus_timeline, "h");
+        let removed_focus_timeline =
+            remove_keybinding(&mut self.keybindings.global.focus_timeline, "h");
         let removed_focus_tasks = remove_keybinding(&mut self.keybindings.global.focus_tasks, "l");
-        if removed_composer || removed_search || removed_focus_timeline || removed_focus_tasks {
+        let removed_quit = remove_keybinding(&mut self.keybindings.global.quit, "ctrl+q");
+        if removed_composer
+            || removed_search
+            || removed_focus_timeline
+            || removed_focus_tasks
+            || removed_quit
+        {
             changed = true;
         }
 
