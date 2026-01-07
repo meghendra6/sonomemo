@@ -4,7 +4,7 @@ use crate::storage;
 use reqwest::blocking::Client;
 use serde::Deserialize;
 use serde_json::json;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
@@ -115,41 +115,67 @@ fn extract_keywords(
     api_key: &str,
     question: &str,
 ) -> Result<Vec<String>, String> {
-    let prompt = format!(
-        "You extract search keywords from user questions for a personal memo log.\n\
-Return ONLY JSON with a single object: {{\"keywords\": [\"...\", ...]}}.\n\
-Rules:\n\
-- Provide 1 to {max} short keywords or short phrases.\n\
-- No punctuation, no duplicates, no extra text.\n\
-Question: {question}",
-        max = config.max_keywords.max(1),
-        question = question.trim()
-    );
-
     let model = resolve_extraction_model(config);
-    let response = generate_text(client, api_key, model, &prompt, 128)?;
-    let json_text = extract_json_object(&response)
-        .ok_or_else(|| "Keyword extraction returned invalid JSON.".to_string())?;
-    let parsed: serde_json::Value =
-        serde_json::from_str(json_text).map_err(|e| format!("Invalid JSON: {e}"))?;
-    let mut keywords = Vec::new();
-    if let Some(list) = parsed.get("keywords").and_then(|v| v.as_array()) {
-        for item in list {
-            if let Some(text) = item.as_str() {
-                let trimmed = text.trim();
-                if !trimmed.is_empty() {
-                    keywords.push(trimmed.to_string());
+    let max_keywords = config.max_keywords.max(1);
+    let attempts = config.extraction_attempts.max(1).min(6);
+    let prompts = keyword_prompts(question.trim(), max_keywords);
+    let mut candidates: HashMap<String, (String, usize)> = HashMap::new();
+    let mut last_error: Option<String> = None;
+
+    for attempt in 0..attempts {
+        let prompt = prompts
+            .get(attempt)
+            .unwrap_or_else(|| prompts.first().expect("prompt"));
+        let temperature = extraction_temperature_for_attempt(config, attempt);
+        let response = match generate_text(client, api_key, model, prompt, 128, temperature) {
+            Ok(text) => text,
+            Err(err) => {
+                last_error = Some(err);
+                continue;
+            }
+        };
+        match parse_keywords_response(&response) {
+            Ok(list) => {
+                for keyword in list {
+                    let lower = keyword.to_ascii_lowercase();
+                    let entry = candidates.entry(lower).or_insert((keyword, 0));
+                    entry.1 = entry.1.saturating_add(1);
                 }
             }
+            Err(err) => {
+                last_error = Some(err);
+            }
+        }
+    }
+
+    if candidates.is_empty() {
+        return Err(last_error.unwrap_or_else(|| "Keyword extraction failed.".to_string()));
+    }
+
+    let mut ranked = candidates
+        .into_iter()
+        .map(|(_, (keyword, count))| (keyword, count))
+        .collect::<Vec<(String, usize)>>();
+    ranked.sort_by(|(left, left_count), (right, right_count)| {
+        right_count
+            .cmp(left_count)
+            .then_with(|| left.len().cmp(&right.len()))
+            .then_with(|| left.cmp(right))
+    });
+
+    let mut keywords: Vec<String> = ranked.iter().map(|(keyword, _)| keyword.clone()).collect();
+    if keywords.len() > max_keywords {
+    let refined =
+        refine_keywords(client, api_key, question, &ranked, max_keywords, model);
+        if let Ok(refined) = refined {
+            keywords = refined;
+        } else {
+            keywords.truncate(max_keywords);
         }
     }
 
     let mut seen = HashSet::new();
     keywords.retain(|keyword| seen.insert(keyword.to_ascii_lowercase()));
-    if config.max_keywords > 0 && keywords.len() > config.max_keywords {
-        keywords.truncate(config.max_keywords);
-    }
-
     if keywords.is_empty() {
         return Err("Keyword extraction returned empty list.".to_string());
     }
@@ -192,7 +218,7 @@ Entries:\n{context}",
     );
 
     let model = resolve_answer_model(config);
-    generate_text(client, api_key, model, &prompt, 512)
+    generate_text(client, api_key, model, &prompt, 512, 0.2)
 }
 
 fn generate_text(
@@ -201,6 +227,7 @@ fn generate_text(
     model: &str,
     prompt: &str,
     max_tokens: u32,
+    temperature: f32,
 ) -> Result<String, String> {
     let url = format!(
         "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
@@ -214,7 +241,7 @@ fn generate_text(
             }
         ],
         "generationConfig": {
-            "temperature": 0.2,
+            "temperature": temperature,
             "maxOutputTokens": max_tokens,
             "topP": 0.9
         }
@@ -245,6 +272,110 @@ fn generate_text(
         .cloned()
         .ok_or_else(|| "Gemini returned empty response.".to_string())?;
     Ok(text.trim().to_string())
+}
+
+fn parse_keywords_response(response: &str) -> Result<Vec<String>, String> {
+    let json_text = extract_json_object(response)
+        .ok_or_else(|| "Keyword extraction returned invalid JSON.".to_string())?;
+    let parsed: serde_json::Value =
+        serde_json::from_str(json_text).map_err(|e| format!("Invalid JSON: {e}"))?;
+    let mut keywords = Vec::new();
+    if let Some(list) = parsed.get("keywords").and_then(|v| v.as_array()) {
+        for item in list {
+            if let Some(text) = item.as_str() {
+                let trimmed = text.trim();
+                if !trimmed.is_empty() {
+                    keywords.push(trimmed.to_string());
+                }
+            }
+        }
+    }
+    Ok(keywords)
+}
+
+fn keyword_prompts(question: &str, max_keywords: usize) -> Vec<String> {
+    vec![
+        format!(
+            "You extract search keywords from user questions for a personal memo log.\n\
+Return ONLY JSON with a single object: {{\"keywords\": [\"...\", ...]}}.\n\
+Rules:\n\
+- Provide 1 to {max} short keywords or short phrases.\n\
+- No punctuation, no duplicates, no extra text.\n\
+Question: {question}",
+            max = max_keywords,
+            question = question
+        ),
+        format!(
+            "Extract the core entities and proper nouns from the question.\n\
+Return ONLY JSON: {{\"keywords\": [\"...\", ...]}}.\n\
+Rules:\n\
+- 1 to {max} entries, no extra text.\n\
+Question: {question}",
+            max = max_keywords,
+            question = question
+        ),
+        format!(
+            "Extract action/intent keywords and likely tag-like terms from the question.\n\
+Return ONLY JSON: {{\"keywords\": [\"...\", ...]}}.\n\
+Rules:\n\
+- 1 to {max} entries, no extra text.\n\
+Question: {question}",
+            max = max_keywords,
+            question = question
+        ),
+    ]
+}
+
+fn extraction_temperature_for_attempt(config: &GeminiConfig, attempt: usize) -> f32 {
+    let base = config.extraction_temperature.clamp(0.0, 1.0);
+    let bump = (attempt as f32) * 0.15;
+    (base + bump).clamp(0.0, 0.9)
+}
+
+fn refine_keywords(
+    client: &Client,
+    api_key: &str,
+    question: &str,
+    candidates: &[(String, usize)],
+    max_keywords: usize,
+    model: &str,
+) -> Result<Vec<String>, String> {
+    let candidate_limit = (max_keywords.saturating_mul(6)).clamp(12, 80);
+    let trimmed_candidates: Vec<String> = candidates
+        .iter()
+        .take(candidate_limit)
+        .map(|(keyword, count)| format!("{keyword} ({count})"))
+        .collect();
+    let prompt = format!(
+        "Select the best search keywords for a personal memo log.\n\
+Return ONLY JSON: {{\"keywords\": [\"...\", ...]}}.\n\
+Rules:\n\
+- Choose up to {max} keywords from the candidates.\n\
+- Favor precise nouns, names, projects, and topics in the question.\n\
+Question: {question}\n\
+Candidates: {candidates}",
+        max = max_keywords,
+        question = question.trim(),
+        candidates = trimmed_candidates.join(", ")
+    );
+
+    let response = generate_text(client, api_key, model, &prompt, 128, 0.1)?;
+    let keywords = parse_keywords_response(&response)?;
+    if keywords.is_empty() {
+        return Err("Refined keyword list is empty.".to_string());
+    }
+
+    let mut seen = HashSet::new();
+    let mut unique = Vec::new();
+    for keyword in keywords {
+        if seen.insert(keyword.to_ascii_lowercase()) {
+            unique.push(keyword);
+        }
+    }
+    if unique.len() > max_keywords {
+        unique.truncate(max_keywords);
+    }
+    Ok(unique)
 }
 
 fn resolve_extraction_model(config: &GeminiConfig) -> &str {
