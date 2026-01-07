@@ -126,7 +126,8 @@ Question: {question}",
         question = question.trim()
     );
 
-    let response = generate_text(client, config, api_key, &prompt, 128)?;
+    let model = resolve_extraction_model(config);
+    let response = generate_text(client, api_key, model, &prompt, 128)?;
     let json_text = extract_json_object(&response)
         .ok_or_else(|| "Keyword extraction returned invalid JSON.".to_string())?;
     let parsed: serde_json::Value =
@@ -190,19 +191,20 @@ Entries:\n{context}",
         context = context.trim_end()
     );
 
-    generate_text(client, config, api_key, &prompt, 512)
+    let model = resolve_answer_model(config);
+    generate_text(client, api_key, model, &prompt, 512)
 }
 
 fn generate_text(
     client: &Client,
-    config: &GeminiConfig,
     api_key: &str,
+    model: &str,
     prompt: &str,
     max_tokens: u32,
 ) -> Result<String, String> {
     let url = format!(
         "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
-        config.model, api_key
+        model, api_key
     );
     let body = json!({
         "contents": [
@@ -243,6 +245,29 @@ fn generate_text(
         .cloned()
         .ok_or_else(|| "Gemini returned empty response.".to_string())?;
     Ok(text.trim().to_string())
+}
+
+fn resolve_extraction_model(config: &GeminiConfig) -> &str {
+    if !config.extraction_model.trim().is_empty() {
+        return config.extraction_model.trim();
+    }
+    if !config.model.trim().is_empty() {
+        return config.model.trim();
+    }
+    if !config.answer_model.trim().is_empty() {
+        return config.answer_model.trim();
+    }
+    "gemma-3-27b"
+}
+
+fn resolve_answer_model(config: &GeminiConfig) -> &str {
+    if !config.answer_model.trim().is_empty() {
+        return config.answer_model.trim();
+    }
+    if !config.model.trim().is_empty() {
+        return config.model.trim();
+    }
+    "gemini-3-flash"
 }
 
 fn extract_json_object(text: &str) -> Option<&str> {
