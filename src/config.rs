@@ -994,6 +994,10 @@ impl Config {
             remove_keybinding(&mut self.keybindings.global.focus_timeline, "h");
         let removed_focus_tasks = remove_keybinding(&mut self.keybindings.global.focus_tasks, "l");
         let replaced_quit = replace_keybinding(&mut self.keybindings.global.quit, "ctrl+q", "q");
+        if self.keybindings.global.quit.is_empty() {
+            self.keybindings.global.quit = vec!["q".to_string()];
+            changed = true;
+        }
         if removed_composer
             || removed_search
             || removed_focus_timeline
