@@ -997,43 +997,46 @@ pub fn ui(f: &mut Frame, app: &mut App) {
     }
 
     // Manual cursor position setting (required for Korean/CJK IME support)
-    if let Some(inner) = cursor_area
-        && inner.height > 0
-        && inner.width > 0
-    {
-        let (cursor_row, cursor_col) = app.textarea.cursor();
-        let prefix_width = compose_prefix_width(app.config.ui.line_numbers);
-        let content_width = (inner.width as usize)
-            .saturating_sub(prefix_width as usize)
-            .max(1);
+    if app.input_mode == InputMode::Editing {
+        if let Some(inner) = cursor_area
+            && inner.height > 0
+            && inner.width > 0
+        {
+            let (cursor_row, cursor_col) = app.textarea.cursor();
+            let prefix_width = compose_prefix_width(app.config.ui.line_numbers);
+            let content_width = (inner.width as usize)
+                .saturating_sub(prefix_width as usize)
+                .max(1);
 
-        // Calculate visual row considering line wrapping
-        let lines = app.textarea.lines();
-        let mut visual_row: usize = 0;
-        let mut cursor_visual_col: usize = 0;
+            // Calculate visual row considering line wrapping
+            let lines = app.textarea.lines();
+            let mut visual_row: usize = 0;
+            let mut cursor_visual_col: usize = 0;
 
-        for (idx, line) in lines.iter().enumerate() {
-            let wrapped = wrap_line_for_editor(line, content_width);
+            for (idx, line) in lines.iter().enumerate() {
+                let wrapped = wrap_line_for_editor(line, content_width);
 
-            if idx == cursor_row {
-                let (wrap_offset, wrap_col) = find_cursor_in_wrapped_lines(&wrapped, cursor_col);
-                visual_row += wrap_offset;
-                cursor_visual_col = wrap_col;
-                break;
+                if idx == cursor_row {
+                    let (wrap_offset, wrap_col) =
+                        find_cursor_in_wrapped_lines(&wrapped, cursor_col);
+                    visual_row += wrap_offset;
+                    cursor_visual_col = wrap_col;
+                    break;
+                }
+
+                visual_row += wrapped.len();
             }
 
-            visual_row += wrapped.len();
+            let visual_row_u16 = (visual_row.min(u16::MAX as usize)) as u16;
+            let row_in_view = visual_row_u16.saturating_sub(app.textarea_viewport_row);
+            let row_in_view = row_in_view.min(inner.height.saturating_sub(1));
+
+            let col_in_view = (cursor_visual_col.min(u16::MAX as usize)) as u16;
+            let col_in_view = col_in_view.saturating_add(prefix_width);
+            let col_in_view = col_in_view.min(inner.width.saturating_sub(1));
+
+            f.set_cursor_position((inner.x + col_in_view, inner.y + row_in_view));
         }
-
-        let visual_row_u16 = (visual_row.min(u16::MAX as usize)) as u16;
-        let row_in_view = visual_row_u16.saturating_sub(app.textarea_viewport_row);
-        let row_in_view = row_in_view.min(inner.height.saturating_sub(1));
-
-        let col_in_view = (cursor_visual_col.min(u16::MAX as usize)) as u16;
-        let col_in_view = col_in_view.saturating_add(prefix_width);
-        let col_in_view = col_in_view.min(inner.width.saturating_sub(1));
-
-        f.set_cursor_position((inner.x + col_in_view, inner.y + row_in_view));
     }
 
     render_status_bar(f, status_area, app, &tokens);

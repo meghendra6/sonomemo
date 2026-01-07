@@ -314,7 +314,7 @@ pub struct EditorConfig {
 
 impl Default for EditorConfig {
     fn default() -> Self {
-        Self { column_width: 88 }
+        Self { column_width: 120 }
     }
 }
 
@@ -1081,7 +1081,7 @@ fn replace_keybinding(list: &mut Vec<String>, old: &str, new: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{key_match, Theme, ThemePreset};
+    use super::{Theme, ThemePreset, key_match};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     #[test]
