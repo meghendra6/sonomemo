@@ -159,6 +159,7 @@ When it completes, MemoLog appends a tomato (🍅) to the task line.
 MemoLog can analyze a question with Gemini, extract keywords, search local logs, and answer
 from your own notes (no external browsing). It makes two API calls per question.
 The default setup uses `gemma-3-27b` for keyword extraction and `gemini-3-flash` for answers.
+Keyword extraction runs multiple passes to improve recall before selecting the final keyword set.
 
 1) Enable Gemini in `config.toml`
 
@@ -169,6 +170,8 @@ api_key = "YOUR_GEMINI_API_KEY"
 model = "gemini-3-flash"
 extraction_model = "gemma-3-27b"
 answer_model = "gemini-3-flash"
+extraction_attempts = 3
+extraction_temperature = 0.4
 max_keywords = 6
 max_results = 8
 max_entry_chars = 1200
