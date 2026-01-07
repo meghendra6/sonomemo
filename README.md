@@ -152,6 +152,33 @@ When it completes, MemoLog appends a tomato (🍅) to the task line.
 
 - `/` opens search
 - `t` shows tag list (tags are any `#word` in your logs)
+- AI search: prefix your query with `?`, `ai:`, or `ask:` to run a Gemini-assisted search
+
+## Gemini AI search (experimental)
+
+MemoLog can analyze a question with Gemini, extract keywords, search local logs, and answer
+from your own notes (no external browsing). It makes two API calls per question.
+The default setup uses `gemma-3-27b` for keyword extraction and `gemini-3-flash` for answers.
+
+1) Enable Gemini in `config.toml`
+
+```toml
+[gemini]
+enabled = true
+api_key = "YOUR_GEMINI_API_KEY"
+model = "gemini-3-flash"
+extraction_model = "gemma-3-27b"
+answer_model = "gemini-3-flash"
+max_keywords = 6
+max_results = 8
+max_entry_chars = 1200
+timeout_seconds = 20
+```
+
+2) Ask a question
+
+- Press `/` and type `?your question` (or `ai:` / `ask:` prefix)
+- MemoLog will show the AI answer and the matched entries
 
 ## Configuration
 
@@ -163,6 +190,7 @@ Environment variables:
 - `MEMOLOG_CONFIG`: override config file path
 - `MEMOLOG_DATA_DIR`: override default data directory
 - `MEMOLOG_LOG_DIR`: override default log directory (used as default `data.log_path`)
+- `GEMINI_API_KEY`: Gemini API key (used if `gemini.api_key` is empty)
 
 The repository root includes a small `config.toml` you can copy and edit.
 You can also open the active config directly inside MemoLog:

@@ -1,6 +1,7 @@
 use crate::{
     app::App,
     config::{EditorStyle, ThemePreset, config_path},
+    integrations::gemini,
     integrations::google,
     models::{self, Priority},
     storage,
@@ -289,14 +290,80 @@ pub fn submit_search(app: &mut App) {
         .map(|s| s.as_str())
         .collect::<Vec<&str>>()
         .join(" ");
-    if !query.trim().is_empty() {
-        app.last_search_query = Some(query.clone());
-        app.search_highlight_query = Some(query.clone());
-        app.search_highlight_ready_at = Some(Local::now() + Duration::milliseconds(150));
-        if let Ok(results) = storage::search_entries(&app.config.data.log_path, &query) {
-            app.logs = results;
-            app.is_search_result = true;
-            app.logs_state.select(Some(0));
+    let trimmed = query.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+
+    if let Some(ai_question) = parse_ai_query(trimmed) {
+        submit_ai_search(app, &ai_question);
+        return;
+    }
+
+    app.last_search_query = Some(trimmed.to_string());
+    app.search_highlight_query = Some(trimmed.to_string());
+    app.search_highlight_ready_at = Some(Local::now() + Duration::milliseconds(150));
+    if let Ok(results) = storage::search_entries(&app.config.data.log_path, trimmed) {
+        app.logs = results;
+        app.is_search_result = true;
+        app.logs_state.select(Some(0));
+    }
+}
+
+fn parse_ai_query(query: &str) -> Option<String> {
+    let trimmed = query.trim();
+    if trimmed.starts_with('?') {
+        let stripped = trimmed.trim_start_matches('?').trim();
+        if !stripped.is_empty() {
+            return Some(stripped.to_string());
         }
     }
+
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.starts_with("ai:") {
+        let stripped = trimmed[3..].trim();
+        if !stripped.is_empty() {
+            return Some(stripped.to_string());
+        }
+    }
+    if lower.starts_with("ask:") {
+        let stripped = trimmed[4..].trim();
+        if !stripped.is_empty() {
+            return Some(stripped.to_string());
+        }
+    }
+    None
+}
+
+fn submit_ai_search(app: &mut App, question: &str) {
+    if app.ai_search_receiver.is_some() {
+        app.toast("AI search already running.");
+        return;
+    }
+
+    if !app.config.gemini.enabled {
+        app.toast("Gemini is disabled. Enable [gemini] in config.toml.");
+        return;
+    }
+
+    let api_key = app.config.gemini.api_key.trim();
+    let env_key = std::env::var("GEMINI_API_KEY").unwrap_or_default();
+    if api_key.is_empty() && env_key.trim().is_empty() {
+        app.toast("Set gemini.api_key in config.toml or GEMINI_API_KEY.");
+        return;
+    }
+
+    app.last_search_query = Some(question.to_string());
+    app.search_highlight_query = None;
+    app.search_highlight_ready_at = None;
+    app.is_search_result = false;
+    app.update_logs();
+
+    let receiver = gemini::spawn_ai_search(
+        app.config.gemini.clone(),
+        app.config.data.log_path.clone(),
+        question.to_string(),
+    );
+    app.ai_search_receiver = Some(receiver);
+    app.toast("AI search started...");
 }

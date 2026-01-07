@@ -337,6 +337,66 @@ pub fn search_entries(log_path: &Path, query: &str) -> io::Result<Vec<LogEntry>>
     Ok(results)
 }
 
+pub fn search_entries_by_keywords(
+    log_path: &Path,
+    keywords: &[String],
+) -> io::Result<Vec<LogEntry>> {
+    ensure_log_dir(log_path)?;
+    let mut results: Vec<(usize, LogEntry)> = Vec::new();
+    let mut normalized = Vec::new();
+
+    for keyword in keywords {
+        let trimmed = keyword.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        normalized.push(trimmed.to_lowercase());
+    }
+
+    if normalized.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut paths: Vec<PathBuf> = Vec::new();
+    if let Ok(entries) = fs::read_dir(log_path) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) == Some("md") {
+                paths.push(path);
+            }
+        }
+    }
+    paths.sort();
+
+    for path in paths {
+        let path_str = path.to_string_lossy().to_string();
+        if let Ok(content) = fs::read_to_string(&path) {
+            let parsed_entries = parse_log_content(&content, &path_str);
+            for entry in parsed_entries {
+                let haystack = entry.content.to_lowercase();
+                let mut score = 0usize;
+                for keyword in &normalized {
+                    if haystack.contains(keyword) {
+                        score += 1;
+                    }
+                }
+                if score > 0 {
+                    results.push((score, entry));
+                }
+            }
+        }
+    }
+
+    results.sort_by(|(score_a, entry_a), (score_b, entry_b)| {
+        score_b
+            .cmp(score_a)
+            .then_with(|| entry_b.file_path.cmp(&entry_a.file_path))
+            .then_with(|| entry_b.line_number.cmp(&entry_a.line_number))
+    });
+
+    Ok(results.into_iter().map(|(_, entry)| entry).collect())
+}
+
 fn parse_log_content(content: &str, path_str: &str) -> Vec<LogEntry> {
     let mut entries: Vec<LogEntry> = Vec::new();
     let lines: Vec<&str> = content.lines().collect();

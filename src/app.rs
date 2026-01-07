@@ -1,4 +1,5 @@
 use crate::config::{Config, Theme};
+use crate::integrations::gemini::{AiSearchOutcome, AiSearchResult};
 use crate::integrations::google::{AuthDisplay, AuthPollResult};
 use crate::models::{
     DatePickerField, EditorMode, EntryIdentity, FoldOverride, FoldState, InputMode, LogEntry,
@@ -18,7 +19,7 @@ use tui_textarea::TextArea;
 
 pub const PLACEHOLDER_COMPOSE: &str = "Write your note here… (Shift+Enter to save, Esc to go back)";
 const PLACEHOLDER_NAVIGATE: &str = "Navigate (press ? for help)…";
-const PLACEHOLDER_SEARCH: &str = "Search…";
+const PLACEHOLDER_SEARCH: &str = "Search… (prefix ? for AI)";
 
 /// Default number of days to load initially (including today)
 const INITIAL_LOAD_DAYS: i64 = 7;
@@ -148,6 +149,10 @@ pub struct App<'a> {
     pub google_auth_display: Option<AuthDisplay>,
     pub google_auth_receiver: Option<Receiver<AuthPollResult>>,
     pub google_sync_receiver: Option<Receiver<crate::integrations::google::SyncOutcome>>,
+    pub show_ai_response_popup: bool,
+    pub ai_response: Option<AiSearchResult>,
+    pub ai_response_scroll: usize,
+    pub ai_search_receiver: Option<Receiver<AiSearchOutcome>>,
 
     // Pomodoro completion alert (blocks input until expiry)
     pub pomodoro_alert_expiry: Option<DateTime<Local>>,
@@ -328,6 +333,10 @@ impl<'a> App<'a> {
             google_auth_display: None,
             google_auth_receiver: None,
             google_sync_receiver: None,
+            show_ai_response_popup: false,
+            ai_response: None,
+            ai_response_scroll: 0,
+            ai_search_receiver: None,
             pomodoro_alert_expiry: None,
             pomodoro_alert_message: None,
             toast_message: None,

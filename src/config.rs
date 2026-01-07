@@ -225,6 +225,7 @@ pub struct Config {
     pub data: DataConfig,
     pub pomodoro: PomodoroConfig,
     pub google: GoogleConfig,
+    pub gemini: GeminiConfig,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -271,6 +272,36 @@ impl Default for GoogleConfig {
             conflict_policy: "prefer_local".to_string(),
             token_path: None,
             sync_state_path: None,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(default)]
+pub struct GeminiConfig {
+    pub enabled: bool,
+    pub api_key: String,
+    pub model: String,
+    pub extraction_model: String,
+    pub answer_model: String,
+    pub max_keywords: usize,
+    pub max_results: usize,
+    pub max_entry_chars: usize,
+    pub timeout_seconds: u64,
+}
+
+impl Default for GeminiConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            api_key: String::new(),
+            model: "gemini-3-flash".to_string(),
+            extraction_model: "gemma-3-27b".to_string(),
+            answer_model: "gemini-3-flash".to_string(),
+            max_keywords: 6,
+            max_results: 8,
+            max_entry_chars: 1200,
+            timeout_seconds: 20,
         }
     }
 }

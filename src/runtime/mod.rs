@@ -1,4 +1,11 @@
-use crate::{actions, app::App, config::google_token_path, integrations::google, models, storage};
+use crate::{
+    actions,
+    app::App,
+    config::google_token_path,
+    integrations::{gemini, google},
+    models,
+    storage,
+};
 use chrono::{Duration, Local};
 use std::sync::mpsc::TryRecvError;
 
@@ -6,6 +13,7 @@ pub fn tick(app: &mut App) {
     handle_day_rollover(app);
     handle_google_sync(app);
     handle_google_auth(app);
+    handle_ai_search(app);
 
     if let Some(end_time) = app.pomodoro_end
         && Local::now() >= end_time
@@ -49,6 +57,52 @@ pub fn tick(app: &mut App) {
         && Local::now() >= expiry
     {
         app.clear_visual_hint();
+    }
+}
+
+fn handle_ai_search(app: &mut App) {
+    let result = {
+        let Some(receiver) = app.ai_search_receiver.as_ref() else {
+            return;
+        };
+        receiver.try_recv()
+    };
+
+    match result {
+        Ok(gemini::AiSearchOutcome::Success(response)) => {
+            app.ai_search_receiver = None;
+            app.ai_response_scroll = 0;
+            app.ai_response = Some(response.clone());
+            app.show_ai_response_popup = true;
+
+            if !response.entries.is_empty() {
+                app.logs = response.entries.clone();
+                app.is_search_result = true;
+                app.logs_state.select(Some(0));
+
+                if let Some(keyword) = response.keywords.first() {
+                    app.search_highlight_query = Some(keyword.to_string());
+                    app.search_highlight_ready_at =
+                        Some(Local::now() + Duration::milliseconds(150));
+                } else {
+                    app.search_highlight_query = None;
+                    app.search_highlight_ready_at = None;
+                }
+            } else {
+                app.is_search_result = false;
+            }
+
+            app.toast("AI search complete.");
+        }
+        Ok(gemini::AiSearchOutcome::Error(message)) => {
+            app.ai_search_receiver = None;
+            app.toast(message);
+        }
+        Err(TryRecvError::Empty) => {}
+        Err(TryRecvError::Disconnected) => {
+            app.ai_search_receiver = None;
+            app.toast("AI search stopped.");
+        }
     }
 }
 

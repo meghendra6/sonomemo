@@ -8,3 +8,14 @@ log_path = "logs"
 submit = ["ctrl+s", "ctrl+d"]
 newline = ["enter"]
 cancel = ["esc"]
+
+[gemini]
+enabled = false
+api_key = ""
+model = "gemini-3-flash"
+extraction_model = "gemma-3-27b"
+answer_model = "gemini-3-flash"
+max_keywords = 6
+max_results = 8
+max_entry_chars = 1200
+timeout_seconds = 20
