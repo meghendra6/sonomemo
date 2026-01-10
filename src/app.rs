@@ -1667,10 +1667,9 @@ fn count_distinct_entry_dates(entries: &[LogEntry]) -> usize {
     let mut count = 0usize;
     for entry in entries {
         let date = file_date(&entry.file_path);
-        if date.is_none() {
+        let Some(date) = date else {
             continue;
-        }
-        let date = date.unwrap();
+        };
         if last.as_ref() != Some(&date) {
             count += 1;
             last = Some(date);
@@ -1690,8 +1689,9 @@ fn round_time_to_quarter(time: NaiveTime) -> NaiveTime {
     let total_minutes = time.hour() as i32 * 60 + time.minute() as i32;
     let rounded = ((total_minutes + 14) / 15) * 15;
     let minutes = rounded.rem_euclid(24 * 60) as u32;
+    // from_hms_opt can only fail with invalid input, but our calculations ensure valid range
     NaiveTime::from_hms_opt(minutes / 60, minutes % 60, 0)
-        .unwrap_or_else(|| NaiveTime::from_hms_opt(0, 0, 0).unwrap())
+        .unwrap_or(NaiveTime::from_hms_opt(0, 0, 0).expect("Valid time constant"))
 }
 
 fn task_priority_rank(priority: Option<Priority>) -> u8 {
@@ -1716,9 +1716,12 @@ fn agenda_sort_key(
         crate::models::AgendaItemKind::Task => 0,
         crate::models::AgendaItemKind::Note => 1,
     };
-    let time = item
-        .time
-        .unwrap_or_else(|| NaiveTime::from_hms_opt(23, 59, 59).unwrap());
+    // Use end-of-day time for items without specific time
+    const END_OF_DAY: NaiveTime = match NaiveTime::from_hms_opt(23, 59, 59) {
+        Some(t) => t,
+        None => unreachable!(),
+    };
+    let time = item.time.unwrap_or(END_OF_DAY);
     (item.date, overdue_rank, kind_rank, time, item.line_number)
 }
 
@@ -1767,7 +1770,11 @@ fn agenda_timeline_indices(app: &App) -> Vec<usize> {
         }
     }
 
-    let time_min = NaiveTime::from_hms_opt(0, 0, 0).unwrap();
+    const MIDNIGHT: NaiveTime = match NaiveTime::from_hms_opt(0, 0, 0) {
+        Some(t) => t,
+        None => unreachable!(),
+    };
+    let time_min = MIDNIGHT;
     overdue.sort_by_key(|idx| {
         let item = &app.agenda_items[*idx];
         (

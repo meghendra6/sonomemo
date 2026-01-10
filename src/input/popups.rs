@@ -511,10 +511,13 @@ fn handle_mood_popup(app: &mut App, key: KeyEvent) {
     } else if key_match(&key, &app.config.keybindings.popup.confirm) {
         if let Some(i) = app.mood_list_state.selected() {
             let mood = Mood::all()[i];
-            let _ = storage::append_entry(
+            if let Err(e) = storage::append_entry(
                 &app.config.data.log_path,
                 &format!("Mood: {}", mood.as_str()),
-            );
+            ) {
+                // Show error to user instead of silently failing
+                app.toast(format!("Failed to log mood: {}", e));
+            }
             app.update_logs();
         }
         check_carryover(app);
@@ -549,8 +552,16 @@ fn check_carryover(app: &mut App) {
 
 fn handle_todo_popup(app: &mut App, key: KeyEvent) {
     if key_match(&key, &app.config.keybindings.popup.confirm) {
+        let mut failed = 0;
         for todo in &app.pending_todos {
-            let _ = storage::append_entry(&app.config.data.log_path, todo);
+            if let Err(_) = storage::append_entry(&app.config.data.log_path, todo) {
+                failed += 1;
+            }
+        }
+        if failed > 0 {
+            app.toast(format!("Failed to carry over {} task(s)", failed));
+        } else if !app.pending_todos.is_empty() {
+            app.toast(format!("Carried over {} task(s)", app.pending_todos.len()));
         }
         app.update_logs();
         app.show_todo_popup = false;

@@ -15,12 +15,26 @@ pub fn handle_editing_mode(app: &mut App, key: KeyEvent) {
         return;
     }
 
-    let allow_composer_shortcuts =
-        !app.is_vim_mode() || matches!(app.editor_mode, EditorMode::Insert);
+    let in_vim_normal = app.is_vim_mode() && matches!(app.editor_mode, EditorMode::Normal);
+    let allow_composer_shortcuts = !app.is_vim_mode()
+        || matches!(app.editor_mode, EditorMode::Insert | EditorMode::Normal);
 
     if allow_composer_shortcuts && key_match(&key, &app.config.keybindings.composer.task_toggle) {
-        if markdown::toggle_task_checkbox(&mut app.textarea) {
-            app.mark_insert_modified();
+        let changed = if in_vim_normal {
+            let snapshot = app.editor_snapshot();
+            let changed = markdown::toggle_task_checkbox(&mut app.textarea);
+            if changed {
+                app.editor_undo.push(snapshot);
+                app.editor_redo.clear();
+            }
+            changed
+        } else {
+            markdown::toggle_task_checkbox(&mut app.textarea)
+        };
+        if changed {
+            if !in_vim_normal {
+                app.mark_insert_modified();
+            }
             app.composer_dirty = true;
         }
         return;
@@ -29,8 +43,21 @@ pub fn handle_editing_mode(app: &mut App, key: KeyEvent) {
     if allow_composer_shortcuts
         && key_match(&key, &app.config.keybindings.composer.priority_cycle)
     {
-        if markdown::cycle_task_priority(&mut app.textarea) {
-            app.mark_insert_modified();
+        let changed = if in_vim_normal {
+            let snapshot = app.editor_snapshot();
+            let changed = markdown::cycle_task_priority(&mut app.textarea);
+            if changed {
+                app.editor_undo.push(snapshot);
+                app.editor_redo.clear();
+            }
+            changed
+        } else {
+            markdown::cycle_task_priority(&mut app.textarea)
+        };
+        if changed {
+            if !in_vim_normal {
+                app.mark_insert_modified();
+            }
             app.composer_dirty = true;
         }
         return;
@@ -41,7 +68,7 @@ pub fn handle_editing_mode(app: &mut App, key: KeyEvent) {
         return;
     }
 
-    if key_match(&key, &app.config.keybindings.composer.context_work) {
+    if allow_composer_shortcuts && key_match(&key, &app.config.keybindings.composer.context_work) {
         let changed = if app.is_vim_mode() && matches!(app.editor_mode, EditorMode::Normal) {
             let snapshot = app.editor_snapshot();
             let changed = app.update_composer_context(TimelineFilter::Work);
@@ -54,7 +81,7 @@ pub fn handle_editing_mode(app: &mut App, key: KeyEvent) {
             app.update_composer_context(TimelineFilter::Work)
         };
         if changed {
-            if allow_composer_shortcuts {
+            if !in_vim_normal {
                 app.mark_insert_modified();
             }
             app.composer_dirty = true;
@@ -62,7 +89,9 @@ pub fn handle_editing_mode(app: &mut App, key: KeyEvent) {
         return;
     }
 
-    if key_match(&key, &app.config.keybindings.composer.context_personal) {
+    if allow_composer_shortcuts
+        && key_match(&key, &app.config.keybindings.composer.context_personal)
+    {
         let changed = if app.is_vim_mode() && matches!(app.editor_mode, EditorMode::Normal) {
             let snapshot = app.editor_snapshot();
             let changed = app.update_composer_context(TimelineFilter::Personal);
@@ -75,7 +104,7 @@ pub fn handle_editing_mode(app: &mut App, key: KeyEvent) {
             app.update_composer_context(TimelineFilter::Personal)
         };
         if changed {
-            if allow_composer_shortcuts {
+            if !in_vim_normal {
                 app.mark_insert_modified();
             }
             app.composer_dirty = true;
@@ -83,7 +112,7 @@ pub fn handle_editing_mode(app: &mut App, key: KeyEvent) {
         return;
     }
 
-    if key_match(&key, &app.config.keybindings.composer.context_clear) {
+    if allow_composer_shortcuts && key_match(&key, &app.config.keybindings.composer.context_clear) {
         let changed = if app.is_vim_mode() && matches!(app.editor_mode, EditorMode::Normal) {
             let snapshot = app.editor_snapshot();
             let changed = app.update_composer_context(TimelineFilter::All);
@@ -96,32 +125,13 @@ pub fn handle_editing_mode(app: &mut App, key: KeyEvent) {
             app.update_composer_context(TimelineFilter::All)
         };
         if changed {
-            if allow_composer_shortcuts {
+            if !in_vim_normal {
                 app.mark_insert_modified();
             }
             app.composer_dirty = true;
-        }
-        return;
-    }
-
-    if app.is_vim_mode() && matches!(app.editor_mode, EditorMode::Normal) {
-        if key_match(&key, &app.config.keybindings.composer.task_toggle) {
-            let snapshot = app.editor_snapshot();
-            if markdown::toggle_task_checkbox(&mut app.textarea) {
-                app.editor_undo.push(snapshot);
-                app.editor_redo.clear();
-                app.composer_dirty = true;
-            }
             return;
         }
-
-        if key_match(&key, &app.config.keybindings.composer.priority_cycle) {
-            let snapshot = app.editor_snapshot();
-            if markdown::cycle_task_priority(&mut app.textarea) {
-                app.editor_undo.push(snapshot);
-                app.editor_redo.clear();
-                app.composer_dirty = true;
-            }
+        if !in_vim_normal {
             return;
         }
     }

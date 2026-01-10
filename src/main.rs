@@ -73,10 +73,17 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::Result<
 
         terminal.draw(|f| ui::ui(f, app))?;
 
-        // Block all input during pomodoro completion alert (forces break/attention)
+        // Block most input during pomodoro completion alert, but allow dismissal with Escape
         if app.pomodoro_alert_expiry.is_some() {
             if event::poll(std::time::Duration::from_millis(100))? {
-                let _ = event::read();
+                let ev = event::read()?;
+                // Allow Escape key to dismiss the alert early
+                if let crossterm::event::Event::Key(key) = ev {
+                    if key.code == crossterm::event::KeyCode::Esc {
+                        app.pomodoro_alert_expiry = None;
+                        app.pomodoro_alert_message = None;
+                    }
+                }
             }
             continue;
         }

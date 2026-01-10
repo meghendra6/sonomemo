@@ -42,6 +42,8 @@ pub fn render_siren_popup(f: &mut Frame, app: &App) {
         message,
         "",
         "Take a break. Stretch. Drink water.",
+        "",
+        "(Press Esc to dismiss)",
     ];
 
     let text_area = Layout::default()
@@ -792,7 +794,7 @@ pub fn render_mood_popup(f: &mut Frame, app: &mut App) {
     let block = Block::default()
         .title(" Mood Check-in ")
         .borders(Borders::ALL);
-    let area = centered_rect(60, 20, f.area());
+    let area = centered_rect(60, 25, f.area());
     f.render_widget(Clear, area);
     f.render_widget(block, area);
 
@@ -801,7 +803,7 @@ pub fn render_mood_popup(f: &mut Frame, app: &mut App) {
 
     let popup_layout = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(100)])
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
         .margin(1)
         .split(area);
 
@@ -810,11 +812,16 @@ pub fn render_mood_popup(f: &mut Frame, app: &mut App) {
         .highlight_style(Style::default().fg(Color::Yellow));
 
     f.render_stateful_widget(list, popup_layout[0], &mut app.mood_list_state);
+
+    // Add helpful footer with keyboard shortcuts
+    let footer = Paragraph::new("↑/↓ select · Enter confirm · Esc skip")
+        .style(Style::default().fg(Color::DarkGray));
+    f.render_widget(footer, popup_layout[1]);
 }
 
 pub fn render_todo_popup(f: &mut Frame, app: &mut App) {
     let title = format!(
-        " Carry over {} unfinished tasks from the last session? (Y/n) ",
+        " Carry over {} unfinished tasks from the last session? ",
         app.pending_todos.len()
     );
     let block = Block::default()
@@ -833,13 +840,17 @@ pub fn render_todo_popup(f: &mut Frame, app: &mut App) {
 
     let popup_layout = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(100)])
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
         .margin(1)
         .split(area);
 
     let list = List::new(items).highlight_symbol(">> ");
-
     f.render_stateful_widget(list, popup_layout[0], &mut app.todo_list_state);
+
+    // Add helpful footer with keyboard shortcuts
+    let footer = Paragraph::new("Enter carry over · Esc skip")
+        .style(Style::default().fg(Color::DarkGray));
+    f.render_widget(footer, popup_layout[1]);
 }
 
 pub fn render_tag_popup(f: &mut Frame, app: &mut App) {

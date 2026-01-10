@@ -536,9 +536,13 @@ fn trailing_context_tag_start(text: &str) -> usize {
 
         let mut ws_start = hash_idx;
         while ws_start > 0 {
-            let prev = text[..ws_start].chars().last().unwrap();
-            if prev.is_whitespace() {
-                ws_start = ws_start.saturating_sub(prev.len_utf8());
+            // Safely get the previous character without panicking on empty string
+            if let Some(prev) = text[..ws_start].chars().last() {
+                if prev.is_whitespace() {
+                    ws_start = ws_start.saturating_sub(prev.len_utf8());
+                } else {
+                    break;
+                }
             } else {
                 break;
             }
@@ -1535,7 +1539,11 @@ mod tests {
         let content = fs::read_to_string(path).expect("read log");
 
         let first_line = content.lines().next().unwrap_or("");
-        let ts_re = Regex::new(r"^## \[\d{2}:\d{2}:\d{2}\]$").unwrap();
+        // Use OnceLock to avoid recompiling regex in tests
+        static TS_REGEX: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+        let ts_re = TS_REGEX.get_or_init(|| {
+            Regex::new(r"^## \[\d{2}:\d{2}:\d{2}\]$").expect("Valid regex pattern")
+        });
         assert!(ts_re.is_match(first_line));
 
         let lines: Vec<&str> = content.split('\n').collect();

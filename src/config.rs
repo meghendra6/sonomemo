@@ -904,6 +904,20 @@ impl Default for PomodoroConfig {
 
 impl Config {
     pub fn load() -> Self {
+        if cfg!(test) {
+            let mut config = Config::default();
+            let preset = config
+                .ui
+                .theme_preset
+                .as_deref()
+                .and_then(ThemePreset::from_name)
+                .unwrap_or_else(ThemePreset::default);
+            config.theme = Theme::preset(preset);
+            config.normalize_paths();
+            config.normalize_keybindings();
+            return config;
+        }
+
         let config_path = config_path();
 
         let mut config = if let Ok(content) = fs::read_to_string(&config_path) {
